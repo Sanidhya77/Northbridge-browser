@@ -1,0 +1,14 @@
+{
+  "servers": {
+    "northbridge-browser": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/bin/northbridge-browser.js"
+      ],
+      "env": {
+        "AGENT_BROWSER_ALLOWED_DOMAINS": "127.0.0.1"
+      }
+    }
+  }
+}

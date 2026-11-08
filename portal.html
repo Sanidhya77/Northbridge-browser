@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Northbridge University | Mock admissions</title>
+  <style>
+    body { margin: 0; font: 17px/1.45 system-ui, sans-serif; color: #152439; }
+    header { background: #173052; color: white; padding: 16px max(24px, calc((100% - 704px)/2)); }
+    header p { margin: 0; }
+    main { max-width: 704px; margin: 24px auto; padding: 0 24px; }
+    h1 { line-height: 1.2; }
+    a { color: #124998; }
+    li { margin: 8px 0; }
+    label { display: block; margin-top: 10px; }
+    input, button { font: inherit; padding: 6px 10px; }
+    input { width: min(100%, 360px); box-sizing: border-box; }
+    button { margin-top: 14px; background: #173052; color: white; border: 1px solid #173052; border-radius: 4px; }
+    dt { font-weight: bold; }
+    dd { margin: 0 0 8px; }
+  </style>
+</head>
+<body>
+  <header><strong>Northbridge University</strong><p>Fictional admissions portal</p></header>
+  <main id="main"></main>
+
+  <template id="catalogue">
+    <h1>Find a programme</h1>
+    <ul>
+      <li><a href="?view=data">MSc Applied Data Science</a></li>
+      <li><a href="?view=design">MA Civic Design</a></li>
+    </ul>
+    <p><a href="?view=drafts">My drafts</a></p>
+  </template>
+
+  <template id="data">
+    <h1>MSc Applied Data Science</h1>
+    <p>Application deadline: <time datetime="2027-05-21">21 May 2027</time></p>
+    <p><a href="?view=application">Start a draft application</a></p>
+    <p><a href="/">Back to programmes</a></p>
+  </template>
+
+  <template id="design">
+    <h1>MA Civic Design</h1>
+    <p>Application deadline: <time datetime="2027-06-11">11 June 2027</time></p>
+    <p><a href="/">Back to programmes</a></p>
+  </template>
+
+  <template id="application">
+    <h1>Draft application</h1>
+    <p>MSc Applied Data Science</p>
+    <form>
+      <label for="name">Full name</label>
+      <input id="name" name="name" required maxlength="100">
+      <label for="email">Email address</label>
+      <input id="email" name="email" type="email" required maxlength="120">
+      <label for="qualification">Previous qualification</label>
+      <input id="qualification" name="qualification" required maxlength="120">
+      <div><button>Save draft</button></div>
+      <p id="save-error" role="alert" hidden>Draft could not be saved. Check browser storage before retrying.</p>
+    </form>
+  </template>
+
+  <template id="drafts">
+    <h1>My drafts</h1>
+    <p id="saved" role="status" hidden>Draft saved.</p>
+    <p id="empty">No saved drafts.</p>
+    <p id="draft-link" hidden><a href="?view=review">Open MSc Applied Data Science draft</a></p>
+    <p><a href="/">Back to programmes</a></p>
+  </template>
+
+  <template id="review">
+    <h1>Review saved draft</h1>
+    <p>MSc Applied Data Science</p>
+    <p>Status: Draft</p>
+    <dl>
+      <dt>Full name</dt><dd data-field="name"></dd>
+      <dt>Email address</dt><dd data-field="email"></dd>
+      <dt>Previous qualification</dt><dd data-field="qualification"></dd>
+    </dl>
+    <p>Check your details here before submission in a real portal.</p>
+    <p><a href="?view=application">Edit draft</a> · <a href="?view=drafts">Back to drafts</a></p>
+  </template>
+
+  <script>
+    const key = 'northbridge-data-science-draft';
+    const params = new URLSearchParams(location.search);
+    const requested = params.get('view');
+    const views = ['data', 'design', 'application', 'drafts', 'review'];
+    let view = views.includes(requested) ? requested : 'catalogue';
+    const draft = JSON.parse(localStorage.getItem(key));
+    if (view === 'review' && !draft) view = 'drafts';
+
+    const main = document.querySelector('main');
+    main.append(document.getElementById(view).content.cloneNode(true));
+
+    if (view === 'application') {
+      const form = main.querySelector('form');
+      for (const input of form.querySelectorAll('input')) {
+        input.value = draft?.[input.name] ?? '';
+      }
+      form.addEventListener('submit', (event) => {
+        event.preventDefault();
+        try {
+          localStorage.setItem(key, JSON.stringify(Object.fromEntries(new FormData(form))));
+        } catch {
+          main.querySelector('#save-error').hidden = false;
+          return;
+        }
+        location.assign('?view=drafts&saved=1');
+      });
+    }
+    if (view === 'drafts' && draft) {
+      main.querySelector('#empty').hidden = true;
+      main.querySelector('#draft-link').hidden = false;
+      main.querySelector('#saved').hidden = params.get('saved') !== '1';
+    }
+    if (view === 'review') {
+      for (const field of main.querySelectorAll('[data-field]')) {
+        field.textContent = draft[field.dataset.field];
+      }
+    }
+  </script>
+</body>
+</html>

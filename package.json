@@ -1,0 +1,22 @@
+{
+  "name": "university-browser-demo",
+  "version": "1.0.0",
+  "private": true,
+  "bin": {
+    "northbridge-browser": "./bin/northbridge-browser.js",
+    "northbridge-research": "./bin/northbridge-research.js",
+    "northbridge-scopus": "./bin/northbridge-scopus.mjs"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "start:scopus": "node scopus-fixture.mjs",
+    "test:mcp": "node test-mcp-acceptance.mjs",
+    "test:cli": "powershell -ExecutionPolicy Bypass -File test-cli-acceptance.ps1",
+    "test:lookup": "node test-mcp-lookup.mjs",
+    "test:research": "node test-research-policy.mjs",
+    "test:scopus": "node test-scopus-acceptance.mjs"
+  },
+  "dependencies": {
+    "agent-browser": "0.41.2"
+  }
+}

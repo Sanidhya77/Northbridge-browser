@@ -1,0 +1,10 @@
+node_modules/
+artifacts/
+.agent-browser/
+*.log
+
+exports/
+test-downloads/
+*.tgz
+.env
+.env.*
