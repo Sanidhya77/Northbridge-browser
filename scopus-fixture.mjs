@@ -162,14 +162,33 @@ function getDocumentsForQuery(executedQuery) {
 }
 
 export function createScopusFixtureServer(options = {}) {
-  const port = Number(options.port || process.env.SCOPUS_PORT || 4318);
+  const port = Number(options.port ?? process.env.SCOPUS_PORT ?? 4318);
   const exportsDir = path.resolve(options.exportsDir || path.join(__dirname, 'exports'));
+  const competeWaiters = new Map();
+  const competeSignals = new Set();
+
+  function signalCompetingTab(token) {
+    if (!token) return;
+    const waiters = competeWaiters.get(token);
+    if (waiters && waiters.length > 0) {
+      competeWaiters.delete(token);
+      for (const w of waiters) {
+        clearTimeout(w.timer);
+        if (!w.res.writableEnded) {
+          w.res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+          w.res.end(JSON.stringify({ trigger: true }));
+        }
+      }
+    } else {
+      competeSignals.add(token);
+    }
+  }
 
   if (!fs.existsSync(exportsDir)) {
     fs.mkdirSync(exportsDir, { recursive: true });
   }
 
-  const server = http.createServer((req, res) => {
+  const server = http.createServer(async (req, res) => {
     const urlObj = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
     const pathname = urlObj.pathname;
 
@@ -335,6 +354,376 @@ export function createScopusFixtureServer(options = {}) {
         'Cache-Control': 'no-cache'
       });
       return res.end(csvContent);
+    }
+
+    // 3b. Competing Download Helpers (tests strict CDP tab attribution)
+    if (pathname === '/scopus/compete-poll') {
+      const token = urlObj.searchParams.get('token') || 'default';
+      if (competeSignals.has(token)) {
+        competeSignals.delete(token);
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        return res.end(JSON.stringify({ trigger: true }));
+      }
+      const list = competeWaiters.get(token) || [];
+      const timer = setTimeout(() => {
+        const cur = competeWaiters.get(token) || [];
+        competeWaiters.set(token, cur.filter(w => w.res !== res));
+        if (!res.writableEnded) {
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+          res.end(JSON.stringify({ trigger: false }));
+        }
+      }, 15000);
+      list.push({ res, timer });
+      competeWaiters.set(token, list);
+      req.on('close', () => {
+        clearTimeout(timer);
+        const cur = competeWaiters.get(token) || [];
+        competeWaiters.set(token, cur.filter(w => w.res !== res));
+      });
+      return;
+    }
+
+    if (pathname === '/scopus/competing-csv') {
+      const rows = Math.max(1, parseInt(urlObj.searchParams.get('rows') || '20', 10) || 20);
+      const header = '"Authors","Title","Year","DOI","Abstract","Author Keywords","Index Keywords"';
+      const lines = [header];
+      for (let i = 1; i <= rows; i++) {
+        lines.push([
+          `"Decoy Author (${i})"`,
+          `"DECOY COMPETING ROW ${i}"`,
+          '"2026"',
+          `"10.9999/decoy.${i}"`,
+          `"Decoy abstract from competing unrelated tab (${i})."`,
+          `"Decoy Keyword ${i}"`,
+          `"Decoy Index ${i}"`
+        ].join(','));
+      }
+      const decoyCsv = '\uFEFF' + lines.join('\r\n') + '\r\n';
+      res.writeHead(200, {
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': 'attachment; filename="competing_tab_export.csv"',
+        'Cache-Control': 'no-store'
+      });
+      return res.end(decoyCsv);
+    }
+
+    if (pathname === '/scopus/competing-download') {
+      const token = urlObj.searchParams.get('token') || 'default';
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+      return res.end(`<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Competing Tab | Fixture (${escapeHtml(token)})</title></head>
+<body>
+  <h1>Competing Unrelated Download Tab (${escapeHtml(token)})</h1>
+  <p id="compete-status">Waiting for signal...</p>
+  <script>
+    const token = ${JSON.stringify(token)};
+    async function pollLoop() {
+      try {
+        const res = await fetch('/scopus/compete-poll?token=' + encodeURIComponent(token));
+        const data = await res.json();
+        if (data && data.trigger) {
+          document.getElementById('compete-status').textContent = 'Triggered decoy download!';
+          const blob = await fetch('/scopus/competing-csv?rows=20').then(r => r.blob());
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = 'competing_tab_export.csv';
+          document.body.appendChild(a);
+          a.click();
+          return;
+        }
+      } catch (e) {}
+      setTimeout(pollLoop, 50);
+    }
+    pollLoop();
+  </script>
+</body>
+</html>`);
+    }
+
+    // 3b. Live-like Export CSV Endpoint (supports range from..to, omit_cols, UTF-8 BOM, blank metadata cells on some rows)
+    if (pathname === '/scopus/export-live-like') {
+      const fromIdx = Math.max(1, parseInt(urlObj.searchParams.get('from') || '1', 10) || 1);
+      const toIdx = Math.max(fromIdx, parseInt(urlObj.searchParams.get('to') || '20', 10) || 20);
+      const totalCount = Math.max(1, parseInt(urlObj.searchParams.get('total') || '25', 10) || 25);
+      const omitColsParam = (urlObj.searchParams.get('omit_cols') || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+      const includeAbsKw = urlObj.searchParams.get('abskw') !== '0';
+      const filename = urlObj.searchParams.get('filename') || `scopus_export_${fromIdx}-${toIdx}.csv`;
+      const competeToken = urlObj.searchParams.get('compete_token') || '';
+      const delayMs = Math.max(0, Math.min(5000, parseInt(urlObj.searchParams.get('delay_ms') || '0', 10) || 0));
+
+      if (competeToken) {
+        signalCompetingTab(competeToken);
+      }
+      if (delayMs > 0) {
+        await new Promise(r => setTimeout(r, delayMs));
+      }
+
+      const validation = validateExportFilename(filename, exportsDir);
+      if (!validation.valid) {
+        res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+        return res.end(`Invalid export filename: ${validation.error}`);
+      }
+
+      // Build 25+ deterministic synthetic documents
+      const allDocs = [];
+      for (let idx = 1; idx <= totalCount; idx++) {
+        const base = SYNTHETIC_DOCUMENTS[(idx - 1) % SYNTHETIC_DOCUMENTS.length];
+        // Intentionally make individual rows have blank DOI (#4, #14) or blank Keywords (#7, #17) while column exists!
+        const rowDoi = (idx === 4 || idx === 14) ? '' : `${base.doi}.${idx}`;
+        const rowAuthorKw = (idx === 7 || idx === 17) ? '' : base.keywords;
+        const rowIndexKw = (idx === 7 || idx === 19) ? '' : `Rank order centroid; Decision analysis (${idx})`;
+        allDocs.push({
+          authors: `${base.authors} (${idx})`,
+          fullAuthors: `${base.authors} [ID-${idx}]`,
+          authorIds: `57000${idx}`,
+          title: idx === 1 ? base.title : `${base.title} — Case Study ${idx}`,
+          year: String(Number(base.year) + (idx % 10)),
+          source: base.source,
+          volume: base.volume,
+          issue: base.issue || '',
+          artNo: '',
+          pageStart: '1',
+          pageEnd: '12',
+          citedBy: String(Math.max(0, 100 - idx * 3)),
+          doi: rowDoi,
+          link: rowDoi ? `https://www.scopus.com/inward/record.uri?doi=${rowDoi}` : `https://www.scopus.com/pages/publications/${idx}`,
+          abstract: base.abstract,
+          authorKeywords: rowAuthorKw,
+          indexKeywords: rowIndexKw,
+          docType: 'Article',
+          pubStage: 'Final',
+          openAccess: idx % 2 === 0 ? 'All Open Access' : '',
+          sourceDb: 'Scopus',
+          eid: `2-s2.0-live-like-${idx}`
+        });
+      }
+
+      const sliceDocs = allDocs.slice(fromIdx - 1, toIdx);
+      const allCols = [
+        { key: 'authors', header: 'Authors' },
+        { key: 'fullAuthors', header: 'Author full names' },
+        { key: 'authorIds', header: 'Author(s) ID' },
+        { key: 'title', header: 'Title' },
+        { key: 'year', header: 'Year' },
+        { key: 'source', header: 'Source title' },
+        { key: 'volume', header: 'Volume' },
+        { key: 'issue', header: 'Issue' },
+        { key: 'artNo', header: 'Art. No.' },
+        { key: 'pageStart', header: 'Page start' },
+        { key: 'pageEnd', header: 'Page end' },
+        { key: 'citedBy', header: 'Cited by' },
+        { key: 'doi', header: 'DOI' },
+        { key: 'link', header: 'Link' },
+        ...(includeAbsKw ? [
+          { key: 'abstract', header: 'Abstract' },
+          { key: 'authorKeywords', header: 'Author Keywords' },
+          { key: 'indexKeywords', header: 'Index Keywords' }
+        ] : []),
+        { key: 'docType', header: 'Document Type' },
+        { key: 'pubStage', header: 'Publication Stage' },
+        { key: 'openAccess', header: 'Open Access' },
+        { key: 'sourceDb', header: 'Source' },
+        { key: 'eid', header: 'EID' }
+      ].filter(c => !omitColsParam.includes(c.header.toLowerCase()));
+
+      const csvLines = [
+        allCols.map(c => escapeCsvField(c.header)).join(','),
+        ...sliceDocs.map(doc => allCols.map(c => escapeCsvField(doc[c.key] ?? '')).join(','))
+      ];
+      // Match real Scopus UTF-8 BOM + CRLF output
+      const bomCsv = '\uFEFF' + csvLines.join('\r\n') + '\r\n';
+
+      res.writeHead(200, {
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': `attachment; filename="${validation.filename}"`,
+        'Cache-Control': 'no-cache'
+      });
+      return res.end(bomCsv);
+    }
+
+    // 3c. Live-like Scopus Results Page (mirrors observed live Scopus Export -> CSV menu & range dialog)
+    if (pathname === '/scopus/results-live-like') {
+      const totalCount = Math.max(1, parseInt(urlObj.searchParams.get('count') || '25', 10) || 25);
+      const qParam = urlObj.searchParams.get('q') || 'TITLE-ABS-KEY ( "rank order centroid" OR "surrogate weight*" OR "ranked attribute weight*" OR "rank-based weight*" )';
+      const omitCols = urlObj.searchParams.get('omit_cols') || '';
+      const competeToken = urlObj.searchParams.get('compete_token') || '';
+      const delayMs = urlObj.searchParams.get('delay_ms') || '';
+      const dropDownload = urlObj.searchParams.get('drop_download') === '1';
+      const rowsHtml = [];
+      for (let i = 1; i <= Math.min(totalCount, 10); i++) {
+        const base = SYNTHETIC_DOCUMENTS[(i - 1) % SYNTHETIC_DOCUMENTS.length];
+        const title = i === 1 ? base.title : `${base.title} — Case Study ${i}`;
+        rowsHtml.push(`<div class="doc-item" data-idx="${i}">
+          <label><input type="checkbox" aria-label="Select result ${i}"> ${i}. <strong>${escapeHtml(title)}</strong></label>
+          <div style="font-size:0.85rem;color:#475569">${escapeHtml(base.authors)} (${base.year})</div>
+        </div>`);
+      }
+
+      const liveLikeHtml = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Scopus - Documents Search | Live-Like Fixture</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; margin: 0; background: #f5f7fa; color: #1e293b; }
+    header { background: #e9711c; color: #fff; padding: 0.75rem 2rem; display: flex; justify-content: space-between; align-items: center; }
+    main { max-width: 1020px; margin: 1.5rem auto; padding: 0 1rem; }
+    .search-bar { background: #fff; padding: 1rem; border: 1px solid #cbd5e1; border-radius: 6px; margin-bottom: 1rem; }
+    .search-bar input { width: 100%; font-family: monospace; padding: 8px; border: 1px solid #cbd5e1; border-radius: 4px; box-sizing: border-box; }
+    .toolbar { display: flex; gap: 12px; align-items: center; background: #fff; padding: 0.75rem 1rem; border: 1px solid #cbd5e1; border-radius: 6px; margin-bottom: 1rem; position: relative; }
+    .doc-item { background: #fff; border: 1px solid #e2e8f0; border-radius: 4px; padding: 0.75rem 1rem; margin-bottom: 0.5rem; }
+    .menu { display: none; position: absolute; top: 44px; left: 160px; background: #fff; border: 1px solid #94a3b8; border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); min-width: 140px; z-index: 20; }
+    .menu.open { display: block; }
+    .menu [role="menuitem"] { display: block; width: 100%; text-align: left; background: #fff; color: #1e293b; border: none; padding: 8px 14px; cursor: pointer; }
+    .menu [role="menuitem"]:hover { background: #e2e8f0; }
+    .modal-bg { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.45); align-items: center; justify-content: center; z-index: 50; }
+    .modal-bg.open { display: flex; }
+    .modal { background: #fff; border-radius: 8px; padding: 1.5rem; width: 520px; max-width: 92vw; }
+    button.primary { background: #007398; color: #fff; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <header>
+    <span><strong>Scopus</strong></span>
+    <span>Documents Search Fixture</span>
+  </header>
+  <main>
+    <div class="search-bar">
+      <input type="text" role="combobox" aria-label="Back to simple search" aria-expanded="false" id="back-to-search" value="${escapeHtml(qParam)}" readonly>
+    </div>
+    <h2>${totalCount} documents found</h2>
+    <div role="tablist" style="display:flex;gap:12px;margin-bottom:1rem;">
+      <button role="tab" aria-selected="true">Documents (${totalCount})</button>
+      <button role="tab" aria-selected="false">Preprints Beta (1)</button>
+      <button role="tab" aria-selected="false">Secondary documents (0)</button>
+    </div>
+    <div class="toolbar">
+      <label><input type="checkbox" id="select-all" aria-label="Select all"> Select all</label>
+      <button type="button" id="export-menu-btn" aria-haspopup="menu" aria-expanded="false" aria-controls="export-format-menu">Export</button>
+      <div id="export-format-menu" role="menu" class="menu">
+        <button type="button" role="menuitem" id="menu-csv">CSV</button>
+        <button type="button" role="menuitem" id="menu-ris">RIS</button>
+        <button type="button" role="menuitem" id="menu-bib">BibTeX</button>
+      </div>
+    </div>
+    <div id="results-list">
+      ${rowsHtml.join('\n')}
+    </div>
+  </main>
+
+  <div id="csv-export-modal" class="modal-bg" role="dialog" aria-modal="true" aria-labelledby="csv-dlg-heading">
+    <div class="modal">
+      <h1 id="csv-dlg-heading" style="font-size:1.25rem;margin-top:0;">Export ${totalCount} documents to CSV</h1>
+      <div>
+        <label><input type="radio" name="scope" id="scope-all" value="all"> All (${totalCount})</label><br>
+        <label><input type="radio" name="scope" id="scope-docs" value="docs" checked> Documents</label>
+        <span>
+          <input type="number" id="range-from" aria-label="From" min="1" max="${totalCount}" value="1" style="width:70px;">
+          <span>&ndash;</span>
+          <input type="number" id="range-to" aria-label="To" min="1" max="${totalCount}" value="${totalCount}" style="width:70px;">
+        </span>
+      </div>
+      <hr>
+      <p style="font-weight:600;margin-bottom:0.5rem;">What information do you want to export?</p>
+      <div>
+        <label><input type="checkbox" id="grp-citation" checked> <strong>Citation information</strong></label>
+        <div style="margin-left:1.5rem;">
+          <label><input type="checkbox" id="col-title" checked> Document title</label>
+          <label style="margin-left:12px;"><input type="checkbox" id="col-doi" checked> DOI</label>
+        </div>
+      </div>
+      <div style="margin-top:0.75rem;">
+        <!-- Matches real Scopus default where Abstract & keywords is UNCHECKED initially -->
+        <label><input type="checkbox" id="grp-abskw"> <strong>Abstract &amp; keywords</strong></label>
+        <div style="margin-left:1.5rem;">
+          <label><input type="checkbox" id="col-abstract"> Abstract</label>
+          <label style="margin-left:12px;"><input type="checkbox" id="col-authorkw"> Author keywords</label>
+          <label style="margin-left:12px;"><input type="checkbox" id="col-indexkw"> Indexed keywords</label>
+        </div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:1.25rem;">
+        <button type="button" id="cancel-csv-btn" onclick="document.getElementById('csv-export-modal').classList.remove('open')">Cancel</button>
+        <button type="button" id="final-csv-export-btn" class="primary">Export...</button>
+      </div>
+      <div id="live-like-status" style="margin-top:0.5rem;font-size:0.85rem;color:#0369a1;"></div>
+    </div>
+  </div>
+
+  <script>
+    const totalCount = ${totalCount};
+    const omitCols = ${JSON.stringify(omitCols)};
+    const competeToken = ${JSON.stringify(competeToken)};
+    const delayMs = ${JSON.stringify(delayMs)};
+    const dropDownload = ${JSON.stringify(dropDownload)};
+    const exportBtn = document.getElementById('export-menu-btn');
+    const menu = document.getElementById('export-format-menu');
+    const modal = document.getElementById('csv-export-modal');
+    const fromEl = document.getElementById('range-from');
+    const toEl = document.getElementById('range-to');
+    const dlgHeading = document.getElementById('csv-dlg-heading');
+    const finalBtn = document.getElementById('final-csv-export-btn');
+
+    function updateHeading() {
+      const f = Math.max(1, parseInt(fromEl.value, 10) || 1);
+      const t = Math.min(totalCount, Math.max(f, parseInt(toEl.value, 10) || totalCount));
+      const count = (t >= f) ? (t - f + 1) : 0;
+      dlgHeading.textContent = 'Export ' + count + ' documents to CSV';
+      finalBtn.disabled = count <= 0;
+    }
+
+    exportBtn.addEventListener('click', () => {
+      const open = menu.classList.toggle('open');
+      exportBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+
+    document.getElementById('menu-csv').addEventListener('click', () => {
+      menu.classList.remove('open');
+      exportBtn.setAttribute('aria-expanded', 'false');
+      modal.classList.add('open');
+      updateHeading();
+    });
+
+    fromEl.addEventListener('input', updateHeading);
+    fromEl.addEventListener('change', updateHeading);
+    toEl.addEventListener('input', updateHeading);
+    toEl.addEventListener('change', updateHeading);
+
+    document.getElementById('grp-abskw').addEventListener('change', (e) => {
+      const checked = e.target.checked;
+      document.getElementById('col-abstract').checked = checked;
+      document.getElementById('col-authorkw').checked = checked;
+      document.getElementById('col-indexkw').checked = checked;
+    });
+
+    finalBtn.addEventListener('click', () => {
+      const f = Math.max(1, parseInt(fromEl.value, 10) || 1);
+      const t = Math.min(totalCount, Math.max(f, parseInt(toEl.value, 10) || totalCount));
+      const includeAbsKw = document.getElementById('col-abstract').checked || document.getElementById('grp-abskw').checked;
+      const dlUrl = '/scopus/export-live-like?from=' + f + '&to=' + t + '&total=' + totalCount
+        + '&abskw=' + (includeAbsKw ? '1' : '0')
+        + (omitCols ? '&omit_cols=' + encodeURIComponent(omitCols) : '')
+        + (competeToken ? '&compete_token=' + encodeURIComponent(competeToken) : '')
+        + (delayMs ? '&delay_ms=' + encodeURIComponent(delayMs) : '');
+      document.getElementById('live-like-status').textContent = 'Export requested (' + f + '-' + t + ')';
+      fetch(dlUrl).then(r => r.blob()).then(blob => {
+        if (dropDownload) {
+          document.getElementById('live-like-status').textContent = 'Suppressed approved download for attribution test';
+          return;
+        }
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'scopus_export_' + f + '-' + t + '.csv';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => modal.classList.remove('open'), 300);
+      });
+    });
+  </script>
+</body>
+</html>`;
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+      return res.end(liveLikeHtml);
     }
 
     // 4. Main Scopus Interface (Home, Advanced, Results)
@@ -620,14 +1009,16 @@ export function createScopusFixtureServer(options = {}) {
     start() {
       return new Promise((resolve, reject) => {
         server.listen(port, '127.0.0.1', () => {
-          console.log(`Scopus test fixture listening at http://127.0.0.1:${port}/`);
-          resolve({ port, exportsDir });
+          const actualPort = server.address().port;
+          console.log(`Scopus test fixture listening at http://127.0.0.1:${actualPort}/`);
+          resolve({ port: actualPort, exportsDir });
         }).on('error', reject);
       });
     },
     stop() {
       return new Promise((resolve) => {
         server.close(resolve);
+        server.closeAllConnections();
       });
     }
   };

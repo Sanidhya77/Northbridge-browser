@@ -9,6 +9,55 @@ The portal serves exclusively on loopback (`http://127.0.0.1:4317/`), stores a s
 
 ---
 
+## Windows Quick Start for Tomorrow
+
+Use this path on Windows to install dependencies, connect your client, and ask plain-language **“Use Northbridge ...”** questions using the 6-step read, navigate, and verify workflow (**Discover -> Orient -> Read -> Reveal -> Verify -> Compact Output**).
+
+### 1. One-Time Local Setup (PowerShell in `university-browser-demo`)
+
+```powershell
+npm.cmd ci
+.\node_modules\.bin\agent-browser.cmd install
+```
+
+*(If Google Chrome is already installed at `C:\Program Files\Google\Chrome\Application\chrome.exe`, approved-tab modes connect to a dedicated debugging profile launched from that binary as well.)*
+
+### 2. Copy-Ready Plain-Language Prompts in Chat
+
+- **Professor / Topic Research Prompt** *(Discovery + Public Page Verification)*:
+  > "Use Northbridge to research Prof. [Full Name]'s main research areas and summarize one open-access paper with exact source URLs and any blocks or limits."
+
+  - **How it runs**: The chat client uses its own search tool (**Discover**) to find candidate URLs, then calls `northbridge_summarize_page` (**Orient -> Read -> Reveal -> Verify -> Compact Output**) on public URLs whose hosts are pre-authorized in `NORTHBRIDGE_APPROVED_DOMAINS` (for example `cs.ox.ac.uk,arxiv.org`).
+  - **Default `.vscode/mcp.json` boundary**: `NORTHBRIDGE_APPROVED_DOMAINS` ships as `""` by default so public URLs halt with `[APPROVAL REQUIRED]` unless explicitly allowlisted by you in MCP configuration (or opened in an approved Chrome tab).
+
+- **Current-Page / Open-Tab Summary Prompt** *(Approved Read-Only Chrome Tab)*:
+  > "Use Northbridge to summarize this page"
+  > "Use Northbridge to summarize the Abstract and Discussion sections of this page, including tables"
+
+  - **CLI Equivalent**:
+    ```powershell
+    # Approved open tab (zero screenshots by default; add --reveal to expand tabs/accordions/pagination):
+    node bin/northbridge-summarize.mjs --auto-connect --approved --tab "Docs" --max-chars 2200
+    ```
+
+- **Scopus Results CSV Export Prompt** *(Approved Dedicated-Profile Results Tab, Records 1–20)*:
+  > "Use Northbridge to export the first 20 Scopus results"
+
+  - **CLI Equivalent** *(requires a dedicated Chrome profile directory such as `ScopusProfile`)*:
+    ```powershell
+    node bin/northbridge-scopus.mjs export --auto-connect --approved --profile-dir "$env:LOCALAPPDATA\Google\Chrome\ScopusProfile" --tab "Scopus" --from 1 --to 20
+    ```
+
+### 3. Honest Verification Separation (As of November 10, 2026)
+
+| Verification Bucket | What Passed / Happened | Scope & Evidence |
+|---|---|---|
+| **Worked in Real Chat** | Loopback admissions demo (`MSc Applied Data Science` deadline `21 May 2027` & draft flow in Antigravity / VS Code / Codex); Fresh Antigravity plain-language subagent (`e32f48a4`) | Subagent `e32f48a4` ran `search_web` Discovery for Prof. Shimon Whiteson + QMIX (`arXiv:2003.08839` / JMLR `20-081`), refused to self-approve or edit config, and verified `[APPROVAL REQUIRED]` / loopback enforcement under unmodified config. |
+| **Passed in Local Scripted / Fixture Tests** | `test:scopus` (**28/28**), `test:summary` (**11/11**), `test:research` (**9/9**), `test:lookup`, `test:mcp`, `test:cli`; plus live unauthenticated public reads | Verified 4-widget interactive reveal (`5,869 ms`, `11,797` obs bytes, `0` screenshots), Shadow DOM/iframe fallback, `tables`/`links`, dedicated-profile CDP download isolation, and live public reads across Oxford CS, `agent-browser.dev`, `w3.org`, `arxiv.org` HTML/abs/PDF, `plos.org`, `pmc`, `pubmed`, `nature.com`, and `mdpi.com`. |
+| **Needs Approved Live Browser Test** | Authenticated **IEEE Xplore** full-text summary & live **Scopus RTU ORTUS/EZproxy** `1–20` CSV export | Requires an active institutional login + MFA in a dedicated Chrome profile; unauthenticated runs stopped cleanly without bypassing login or WAF gates. |
+
+---
+
 ## Research from Chat
 
 You can ask your AI coding agent plain-language research questions directly in chat without supplying starting URLs, CSS selectors, element refs, or browser commands:
@@ -62,17 +111,19 @@ In compatible desktop agents (VS Code Copilot, Google Antigravity, Cursor, OpenA
 - **Daily Use within Preset**: Once configured, everyday research proceeds naturally from chat without URLs or browser commands.
 - **Discovering New Sites Outside Preset**: Because desktop coding agent hosts do not support interactive confirmation prompts during tool calls, discovering a new institution outside the preapproved list requires the user to add the domain to `NORTHBRIDGE_APPROVED_DOMAINS` in their MCP configuration. Navigating to an unapproved site halts with `[APPROVAL REQUIRED]`. Broad wildcards (`*`) and agent self-approval tools are deliberately disallowed to preserve human authorization integrity.
 
-### One-Time Connection for Public Research
+### Permission & Security Boundary Separation
 
-Northbridge Browser provides two distinct MCP servers so public research and loopback testing remain strictly separated:
+Northbridge Browser provides separate MCP servers so loopback testing, public URL research, read-only page summarization, and approved Scopus CSV export remain strictly compartmentalized:
 
 | Server Name | Entry Point | Policy & Scope | Primary Use Case | Default Status |
 |---|---|---|---|---|
 | `northbridge-browser` | `bin/northbridge-browser.js` | Loopback only (`127.0.0.1:4317`) | Local mock admissions portal tests | **Active in default setup** |
-| `northbridge-browser-research` | `bin/northbridge-research.js` | Safe public research (read-only; pre-request network filter; session-isolated; blocks loopback, private networks, and `file:`) | Plain-language web research from chat | **Kept out of default setup** (blocked on connection-time IP gap) |
+| `northbridge-scopus` | `bin/northbridge-scopus-mcp.mjs` | Export-only (`northbridge_export_scopus_results`); requires `approved: true` + unique `--tab` + `--pin-tab` + dedicated Chrome profile (`--profile-dir` / `ScopusProfile`, refusing shared default Chrome User Data); `targetId`-scoped CDP download attribution into `.gitignore`d `pilot-exports/`; zero credential/MFA/CAPTCHA bypasses | Plain-language Scopus results CSV export (`1–20`) | **Active in default setup** |
+| `northbridge-summarize` | `bin/northbridge-summarize-mcp.mjs` | Read-only 6-step summary (`northbridge_summarize_page`); zero screenshots unless explicitly requested with `screenshotReason`; `--reveal` verification; structured `tables` & redacted `links`; `url` mode routes through `northbridge-research` with `NORTHBRIDGE_APPROVED_DOMAINS` (default `""`) while `tab` mode requires `approved: true` + `--pin-tab` (cannot mix `url` and `tab`/`cdp`) | Plain-language page/article/PDF summary | **Active in default setup** (`NORTHBRIDGE_APPROVED_DOMAINS=""`) |
+| `northbridge-browser-research` | `bin/northbridge-research.js` | Safe public research (read-only; pre-request network filter; session-isolated; blocks loopback, private networks, and `file:`) | Raw multi-step public web browsing | **Kept out of default setup** (blocked on connection-time IP gap) |
 
 > [!IMPORTANT]
-> **Default Setup Policy**: The public research server (`northbridge-browser-research`) is kept **out of the default setup** (`.vscode/mcp.json`) while the upstream connection-time private-network IP gap remains open. The default configuration enables only `northbridge-browser` for local loopback verification. If opting in to test research mode locally, add `northbridge-browser-research` manually to `.vscode/mcp.json` with your approved target domains:
+> **Default Setup Policy**: The raw public research server (`northbridge-browser-research`) is kept **out of the default setup** (`.vscode/mcp.json`) while the upstream connection-time private-network IP gap remains open. `.vscode/mcp.json` enables `northbridge-browser` (loopback `127.0.0.1`), `northbridge-scopus` (`northbridge_export_scopus_results`), and `northbridge-summarize` (`northbridge_summarize_page` with `NORTHBRIDGE_APPROVED_DOMAINS=""` by default so public URLs require explicit domain configuration and approved Chrome tabs require `approved: true`). If opting in to raw research tools locally, add `northbridge-browser-research` manually:
 
 ```json
 {
@@ -89,6 +140,85 @@ Northbridge Browser provides two distinct MCP servers so public research and loo
     }
   }
 }
+```
+
+---
+
+## Plain-Language Chat Experience (MCP Clients)
+
+Connected MCP clients (VS Code, Google Antigravity, Cursor, Codex, Claude Desktop) expose high-level tools in `.vscode/mcp.json` so users can speak in plain English without naming browser engines, CSS selectors, or `@ref` tokens:
+
+- **Summarize a page or section**:
+  > "Use Northbridge to summarize this page"
+  > "Use Northbridge to summarize the Discussion section of this page"
+- **Export the first 20 Scopus results**:
+  > "Use Northbridge to export the first 20 Scopus results"
+
+### Quick CLI Equivalents
+
+```powershell
+# Read-only page summary (approved already-open Chrome tab, paginated to first focused sections):
+node bin/northbridge-summarize.mjs --auto-connect --approved --tab "IEEE" --max-chars 2200
+
+# Read-only page summary with safe reveal of hidden tabs/accordions/pagination:
+node bin/northbridge-summarize.mjs --auto-connect --approved --tab "PLOS ONE" --reveal --max-chars 2200
+
+# Read specific section or paginate long prose by char offset without pulling the full page:
+node bin/northbridge-summarize.mjs --auto-connect --approved --tab "PLOS ONE" --section "Discussion" --offset 2000
+
+# Read public documentation URL via northbridge-research security boundary (domain allowlist required):
+$env:NORTHBRIDGE_APPROVED_DOMAINS = "agent-browser.dev"
+node bin/northbridge-summarize.mjs --url "https://agent-browser.dev/commands" --section "Read agent-friendly text"
+
+# Repeatable Scopus results-tab -> CSV export (requires dedicated Chrome profile; writes to gitignored pilot-exports/):
+node bin/northbridge-scopus.mjs export --auto-connect --approved --profile-dir "$env:LOCALAPPDATA\Google\Chrome\ScopusProfile" --tab "Scopus" --from 1 --to 20
+```
+
+---
+
+## Read-Only Page Summary Pilot (`northbridge-summarize`)
+
+The read-only summary engine ([`page-summary.mjs`](page-summary.mjs), [`bin/northbridge-summarize.mjs`](bin/northbridge-summarize.mjs), [`bin/northbridge-summarize-mcp.mjs`](bin/northbridge-summarize-mcp.mjs)) implements the 6-step **Discover -> Orient -> Read -> Reveal -> Verify -> Compact Output** workflow with zero screenshots unless `--screenshot-reason` / `screenshotReason` is explicitly supplied for a chart, image, or layout. All extracted content is framed strictly inside `[UNTRUSTED EXTERNAL DATA - BEGIN]` / `[UNTRUSTED EXTERNAL DATA - END]` with credential/token query redaction (`sanitizeUrl`).
+
+### 6-Step Read, Navigate & Verify Loop
+
+1. **Discover** *(outside the browser verifier)*: Use the client's search tool when the user gives a topic without a URL, or ask for a starting page; keep search discovery distinct from live page verification.
+2. **Orient**: Read page title, redacted URL, full headings outline, compact accessibility snapshot, interactive controls (`tabs`, `accordions`, `pagination`, `load-more`), and `inaccessibleSections` (canvas/`application` widgets or `<iframe>` controls where `agent_browser_frame` is CLI-only).
+3. **Read**: Extract focused paginated prose (`--section`, `--section-index`, `--max-chars`, `--offset`), structured `tables` bounded by `--max-table-rows` (default `20`), redacted `links`, and automatic Shadow DOM / accessible iframe fallback whenever `agent_browser_read` omits visible DOM text.
+4. **Reveal** *(`--reveal` / `reveal`)*: Safely activates non-utility tabs, `<details>`/`[aria-expanded=false]` accordions (skipping utility toggles such as `Skip To Content` or `Open ... menu`), `Next` pagination, or `Load more` (scrolling off-viewport targets once if needed) within bounded settle polling.
+5. **Verify**: Confirms hidden panel/lazy content was absent before activation and verified changed afterward (`verifiedChanged`), never attempts form inputs/eval mutations, and separates observation payload bytes (`obsBytes`) from runtime token counts (`modelTokens: null` when unexposed).
+6. **Compact Output**: Returns bounded sections with explicit status, pagination hints (`nextSectionHint`, `omittedChars`, `omittedRows`), and metrics.
+
+### Eight Explicit Content Classifications (`contentStatus`)
+
+| `contentStatus` | `fullTextAvailable` | Observed Meaning & Behavior |
+|---|---|---|
+| `normal` | `true` | Complete unfiltered article or documentation body verified (`fullTextAvailable: true`). |
+| `partial-body` | `false` | Filtered `--section` / `--section-index` single-section extraction, truncated preview, or partial excerpt (never marks `fullTextAvailable: true`). |
+| `abstract-only` | `false` | Paywalled preview (`This is a preview of subscription content`, `Access via your institution`) or open abstract-landing record (`arxiv.org/abs/...`, `pubmed.ncbi.nlm.nih.gov/...`). |
+| `metadata-only` | `false` | Bibliographic/catalog stub without abstract or article body prose (`narrativeWords < 90` / `< 35` depending on stub vs. scholarly cues; technical docs mentioning `"metadata only"` do not misclassify). |
+| `outline-only` | `false` | Headings outline extracted with zero readable prose or table content behind the headings (`fullTextAvailable: false`). |
+| `blocked` | `false` | WAF/anti-bot block (`Access Denied`, Cloudflare/Akamai), authentication gate without abstract, or empty script-blocked shell (`0` body words). Reported truthfully with zero bypasses. |
+| `pdf-readable` | `!filteredSectionOnly` | Text-layer PDF readable through standard browser reading primitives. |
+| `pdf-unreadable` | `false` | Browser displays Chrome's PDF viewer/stream (`Toggle sidebar`, `Page number`, `Zoom out`) with no extractable text layer; reported accurately with **zero** third-party PDF parser dependencies added. |
+
+### Observed Live Public Validation & Known Limitations
+
+Following owner direction to skip authenticated institutional IEEE Xplore/Scopus runs (public Wi-Fi without institutional login) and test freely visible public pages, the live summary module (`page-summary.mjs`) was exercised across public university, documentation, scholarly, and WAF-protected pages (0 screenshots across all runs; `modelTokens: null`):
+
+| Category | Verified Live Target(s) | Observed Result (with Metrics) |
+|---|---|---|
+| **University Professor Profiles** | `https://www.cs.ox.ac.uk/people/shimon.whiteson/` (discovered via `search_web`) *(note: `https://nlp.stanford.edu/~manning/` timed out at `25,295 ms` `ERR_CONNECTION_TIMED_OUT`)* | **Unfiltered**: `normal` (`fullTextAvailable: true`, `8` headings, `62` links, `7,740 ms` wall / `7,567 ms` action, `6` calls, `0` retries, `obsBytes: 17,958`). **`--section "Selected Publications"`**: `partial-body` (`fullTextAvailable: false`, `usedFilteredRead: true`, `8,553 ms` wall, `obsBytes: 16,061`). |
+| **Open-Access Public Docs** | `https://agent-browser.dev/commands`, `https://www.w3.org/WAI/ARIA/apg/patterns/disclosure/` | `NORTHBRIDGE_APPROVED_DOMAINS=""` halts `[APPROVAL REQUIRED]`. On `agent-browser.dev/commands` (`--section "snapshot"` -> `partial-body`, `5,857 ms`, `obsBytes: 174,658`; unfiltered -> `normal`, `66` headings, `1` table, `168` links, `5,798 ms`, `obsBytes: 135,111`). On `w3.org/.../disclosure/` with `--reveal`: `normal`, `4,956 ms` wall / `4,800 ms` action, `10` calls, `0` retries, `obsBytes: 17,975` *(note: live page utility toggles like `Skip To Content` were safely skipped; full 4-widget reveal proof ran in `test:summary` Test 9)*. |
+| **Open-Access Full Articles** | `https://arxiv.org/html/2311.10090v1` (*JaxMARL*), `https://arxiv.org/html/2510.10666` (*BrowserAgent*), `https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0317084`, `https://pmc.ncbi.nlm.nih.gov/articles/PMC11405275/` | **JaxMARL HTML**: `--section "Abstract"` -> `partial-body` (`6,785 ms`, `9` tables parsed, `obsBytes: 162,860`); unfiltered -> `normal` (`usedFallback: true` `snapshot-tree`, `53` headings, `7,252 ms`, `obsBytes: 195,706`). Prior runs on *BrowserAgent*, PLOS ONE, and PMC also verified `normal` and study limitations. |
+| **Abstract-Only Landing & Paywalls** | `https://arxiv.org/abs/2311.10090`, `https://arxiv.org/abs/2510.10666`, `https://www.nature.com/articles/s42254-023-00581-4`, `https://pubmed.ncbi.nlm.nih.gov/38961264/` | **JaxMARL abs**: `abstract-only` (`fullTextAvailable: false`, `5,404 ms` wall / `5,262 ms` action, `7` calls, `0` retries, `obsBytes: 24,096`). Nature preview paywall (`idp.nature.com` redirect gate respected) and PubMed `##\nAbstract` also classified `abstract-only`. |
+| **WAF / Unauthenticated Shell Blocks** | `https://www.mdpi.com/2076-3417/14/5/2074`, `https://ieeexplore.ieee.org/document/11364183/` | **MDPI**: `blocked` (`Access Denied` Akamai WAF, `3,897 ms`, `6` calls, `0` retries, `obsBytes: 661`). **IEEE unauthenticated doc**: `blocked` (empty SPA shell, `97` obs bytes, `4,001 ms`). *(Approved open IEEE portal homepage tab `https://ieeexplore.ieee.org/Xplore/home.jsp` also verified read-only in `3,649 ms`.)* |
+| **Live PDFs** | `https://arxiv.org/pdf/2311.10090`, `https://arxiv.org/pdf/2510.10666`, `https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf` | **Approved-tab Chrome mode**: `2311.10090` PDF verified `isPdf: true`, `pdfTextReadable: false`, `contentStatus: "pdf-unreadable"`, `fullTextAvailable: false` (`3,942 ms` wall / `3,902 ms` action, `9` calls, `0` retries, `obsBytes: 259`). **Public-research URL mode** (`--url`) on `.pdf` links hits Chrome's internal `chrome-extension://` PDFium viewer frame under CDP `Fetch.enable` and exits `FETCH_ERROR` cleanly at `25 s` timeout, advising approved-tab mode or companion HTML/abstract. |
+
+Run the 11-test read-only summary, interactive reveal & MCP UX regression suite (`npm.cmd run test:summary`):
+
+```powershell
+npm.cmd run test:summary
 ```
 
 ---
@@ -123,9 +253,9 @@ Northbridge Browser reports **fixture execution**, **external Chrome attachment*
 
 | Environment / Route | Status | Capability & Verification Notes |
 |---|:---:|---|
-| **Local Fixture** (`scopus-fixture.mjs`) | **Verified** | 100% automated test coverage (22/22 regression checks pass). Covers exact Block D3 execution, preprint isolation, control confirmation, multiline RFC 4180 parsing, count mismatch detection, path traversal protection, query syntax/rewrite/missing handling, search-within filter restoration, missed control indexing, and non-destructive failure preservation. |
-| **External Chrome Attachment & CLI** (CDP Port 9222 / 9223) | **Verified** | Verified against external Chrome with an isolated profile and harmless local page (`/scopus/harmless`). Enforces loopback-only endpoints (`validateCdpEndpoint`), rejects empty metadata (`{}`), performs pre-flight HTTP probe against `/json/version` preventing silent replacement browser launches, verifies tab switch success and active tab ID/URL before typing/clicking, executes standalone CLI with clean code 0 exit, and leaves unrelated tabs and browser processes completely untouched. |
-| **Riga Technical University (RTU)** | **Pending Live Pilot** | Protocol, CDP attach, and prompt ready via EZproxy/ORTUS (`*.scopus.com`, `*.rtu.lv`). Supports user-selected route with zero credential exposure. **Unverified until tested live with the owner**. |
+| **Local Fixture** (`scopus-fixture.mjs`) | **Verified** | 100% automated test coverage (**28/28** regression checks pass in `test:scopus`). Covers exact Block D3 execution, preprint isolation, control confirmation, multiline RFC 4180 parsing, count mismatch detection, path traversal protection, query syntax/rewrite/missing handling, search-within filter restoration, missed control indexing, non-destructive failure preservation, atomic collision preservation byte-for-byte, multi-attribute `@ref` matching (`[expanded=false, ref=e330]`), ambiguous download rejection, missing-column vs blank-cell distinction, repeatable live-like 1–20 CSV export, dedicated-profile enforcement, and `targetId`-scoped CDP download attribution rejecting decoy competing-tab downloads. |
+| **External Chrome Attachment, Auto-Connect, & CLI** (CDP / Auto-Discovery) | **Verified** | Verified against external Chrome with dynamic port discovery (`DevToolsActivePort`), loopback enforcement (`validateCdpEndpoint`), empty metadata `{}` rejection, user approval gate (`--approved`), tab pinning (`--pin-tab` / `AGENT_BROWSER_PIN_TAB=1`), harmless local page (`/scopus/harmless`), repeatable `northbridge-scopus export` (`1–20`), and clean code 0 CLI/MCP exits leaving unrelated tabs untouched. |
+| **Riga Technical University (RTU)** | **Pending Live Pilot** | Live 1–20 pilot skipped/pending during owner remote Wi-Fi testing without institutional access. Protocol, auto-connect/CDP attach, and repeatable `export` subcommand ready via EZproxy/ORTUS (`*.scopus.com`, `*.rtu.lv`). Zero credential exposure. **Unverified until tested live with institutional login**. |
 | **Other Institutions** (e.g. Tartu, UL, consortium) | **Pending Live Pilot (Simulated)** | Route simulated via `/scopus/other-institution` with sign-in pause and subscription permission checks. **Individually unverified until tested live**. |
 | **Direct Personal Account** | **Pending Live Pilot (Simulated)** | Route simulated via `/scopus/direct` with sign-in pause. **Individually unverified until tested live**. |
 
@@ -168,20 +298,32 @@ EXPORT: Ch3_34_SC_D3.csv
    Any deviation, access block, export collision note, or issue.
    ```
 
+### Repeatable Results-Tab Export (`export` / `northbridge_export_scopus_results`)
+
+In addition to the mock full-search runner (`executeScopusBlock`), Northbridge provides a dedicated, repeatable **Export → CSV** command starting directly from an already-open, user-approved Scopus results tab (`exportScopusResultsTab` via `node bin/northbridge-scopus.mjs export` or MCP tool `northbridge_export_scopus_results`):
+
+- **Multi-Attribute Snapshot Refs**: Matches `@ref` across attributes such as `[expanded=false, ref=e330]` (`findRef`) and always captures fresh snapshots after opening menus or dialogs.
+- **Pre-Click Verification**: Confirms displayed query (`--expected-query`) and visible result count, opens **Export → CSV**, sets the requested range (`--from`/`--to`, `--count`, or `--range 1-20`), checks **Abstract & keywords** and required column checkboxes, and verifies format, range, count, columns, and enabled state before clicking final Export **once**.
+- **Isolated Download Attribution & Dedicated-Profile Guard**: Enforces a dedicated Chrome profile before issuing browser-wide `Browser.setDownloadBehavior allowAndName` (rejecting shared default User Data profiles and unverified bare `--cdp` calls with `DEDICATED_PROFILE_REQUIRED`), binds CDP `Page.downloadWillBegin` / `Page.downloadProgress` strictly to the approved tab's `targetId` so competing-tab downloads never hijack or poison an export (Test 28), and falls back to strict folder diff (`identifyFreshDownload`) failing loudly with `EXPORT AMBIGUOUS` if multiple candidates appear.
+- **Missing Column vs. Valid Blank Cell Distinction**: Validates UTF-8 BOM CSV headers (`Title`, `DOI`, `Abstract`, and keywords) separately from counting valid blank DOI/keyword cells on individual papers (`validateScopusCsvContent`), saving verified CSVs atomically into `.gitignore`d `pilot-exports/` without overwriting existing files.
+
 ### Running the Acceptance Suite & CLI Runner
 
 ```powershell
-# Run the 22-test Scopus acceptance suite:
+# Run the 28-test Scopus acceptance suite:
 npm.cmd run test:scopus
 
-# Run the standalone Scopus Block D3 CLI runner (auto-starts local fixture on port 4318):
+# Run the repeatable Export-only CLI on an explicitly approved dedicated-profile Scopus results tab (saves to pilot-exports/):
+node bin/northbridge-scopus.mjs export --auto-connect --approved --profile-dir "$env:LOCALAPPDATA\Google\Chrome\ScopusProfile" --tab "Scopus" --range 1-20
+
+# Run the standalone Scopus Block D3 fixture runner (auto-starts local fixture on port 4318):
 node bin/northbridge-scopus.mjs --block D3
 
-# Run against an externally launched Chrome instance on port 9222 (requires --tab):
-node bin/northbridge-scopus.mjs --cdp 9222 --tab "Scopus" --block D3
+# Pre-flight verify attachment to open tab without executing search:
+node bin/northbridge-scopus.mjs --auto-connect --approved --verify-attachment --tab "Scopus"
 
-# Run against an already-open Scopus tab in an active session:
-node bin/northbridge-scopus.mjs --tab "Scopus" --block D3
+# Run against an externally launched Chrome instance on port 9222 with dedicated profile (fallback):
+node bin/northbridge-scopus.mjs --cdp 9222 --profile-dir "$env:LOCALAPPDATA\Google\Chrome\ScopusProfile" --tab "Scopus" --block D3
 
 # Run against an institutional library link:
 node bin/northbridge-scopus.mjs --url "https://www-scopus-com.ezproxy.rtu.lv" --block D3
@@ -212,12 +354,48 @@ Northbridge Browser supports attaching to an externally running Google Chrome in
    - **Test 20**: Tab failure tests prove that missing tabs, ambiguous tabs, failed tab switches, and active tab target ID mismatches cleanly halt with `TAB ERROR` before search.
    - **Test 21**: Proves pinned engine rejection of `--cdp` combined with `--allowed-domains`.
    - **Test 22**: Proves standalone CLI execution (`bin/northbridge-scopus.mjs`) against external Chrome: exits cleanly with code `0`, exports 4 parsed CSV records, preserves pre-existing same-name files byte-for-byte under unique candidate names (`(1).csv`), leaves unrelated tabs untouched, and keeps external Chrome running.
+7. **Automatic Discovery (`--auto-connect`), Approval Gate, Tab Pinning (`--pin-tab`), & Dedicated-Profile Guard (Tests 23 & 28)**:
+   - **Dynamic Port Discovery**: Automatically locates running Chrome instances by reading `DevToolsActivePort` in dedicated candidate directories (`--profile-dir`, `NORTHBRIDGE_CHROME_PROFILE_DIR`, `CHROME_USER_DATA_DIR`, `%LOCALAPPDATA%\Google\Chrome\ScopusProfile`, `%LOCALAPPDATA%\Northbridge\ChromeProfile`) before checking default directories. Validates the dynamic loopback port without probing fixed port 9222 first.
+   - **Explicit User Approval Gate**: Connecting to an open browser requires explicit user consent (`--approved` / `approved: true`). When denied (`--deny`) or left unapproved, the runner halts immediately with `APPROVAL ERROR: approval required` and exit code 1 before issuing any commands to the browser.
+   - **Strict Tab Pinning (`AGENT_BROWSER_PIN_TAB=1`) & `targetId`-Scoped Download Attribution**: Session actions stay bound to the selected tab (`tab_gone` if closed/redirected away), and Scopus CSV exports validate a dedicated profile (`DEDICATED_PROFILE_REQUIRED` if shared default User Data or unverified bare `--cdp` is passed) while attributing CDP download events strictly by `targetId` (Test 28).
+   - **Unrelated Tab Isolation**: Unrelated tabs in the same or other windows are confirmed open and untouched.
+   - **Security Boundary Disclosure**: Chrome remote debugging exposes debugger control over the browser profile at the transport layer, while tab pinning restricts Northbridge strictly to the selected tab. Users should only connect to browser instances they approve, and Scopus export (`Browser.setDownloadBehavior`) requires a dedicated profile directory.
+   - **Dedicated Profile Fallback**: Users who prefer explicit port control can use `--cdp <port> --profile-dir <dir>` with a dedicated user data directory.
 
 ### Live Pilot Guide (Owner Setup & Chat Prompt)
 
-To execute a live search block through your chosen institutional or direct access route (e.g. Riga Technical University, other universities, or a direct personal account):
+The automated search and CSV export currently target the local Scopus fixture. On an authenticated Scopus tab, use `--verify-attachment` to check the connection and tab selection. Live search and export still require a read-only inspection of the real page controls before running a pilot.
 
-#### 1. Launch Chrome with Remote Debugging & Dedicated Profile
+To execute a live search block through your chosen institutional or direct access route (e.g. Riga Technical University, other universities, or a direct personal account), choose either Option 1 (Use My Open Scopus Tab) or Option 2 (Dedicated Profile Fallback):
+
+#### Option 1: Use My Open Scopus Tab (Preferred · `--auto-connect`)
+
+1. **Sign in to Scopus**: Open Google Chrome as you normally do. Navigate to Scopus through your institutional portal (e.g. RTU ORTUS `https://ortus.rtu.lv` -> Library -> Scopus or `https://www-scopus-com.ezproxy.rtu.lv`), library proxy, or direct account (`https://www.scopus.com`). Complete your institutional sign-in and MFA in the browser. Leave the Scopus tab open.
+2. **Pre-flight Verify Attachment (Optional)**:
+   ```powershell
+   node bin/northbridge-scopus.mjs --auto-connect --approved --verify-attachment --tab "Scopus"
+   ```
+   Northbridge discovers the active Chrome endpoint dynamically (without probing port 9222 first), confirms explicit approval, verifies the exact Scopus tab, and confirms connection readiness.
+3. **Trigger Live Search Block from Desktop Agent Chat**:
+   In your desktop agent chat (Antigravity, VS Code Copilot, Codex), paste the copy-ready user prompt:
+
+   > "Scopus is open in my browser and I’m signed in. Use Northbridge with --auto-connect and --approved to run Scopus block D3:
+   > - Block: D3
+   > - Claim: Weights can be derived from a rank order.
+   > - Query: TITLE-ABS-KEY ( \"rank order centroid\" OR \"surrogate weight*\" OR \"ranked attribute weight*\" OR \"rank-based weight*\" )
+   > - Control paper: Decision quality using ranked attribute weights
+   > - Export file: Ch3_34_SC_D3.csv
+   > - Tab: Scopus
+   >
+   > Run the query exactly as supplied, check the control paper, export the main results as CSV, and return the reproducible search log. Pause if you need me to sign in again or re-authenticate."
+
+---
+
+#### Option 2: Dedicated Chrome Profile Fallback (Explicit `--cdp 9222`)
+
+If you prefer running in a completely separate, dedicated Chrome profile:
+
+##### 1. Launch Chrome with Remote Debugging & Dedicated Profile
 In a PowerShell terminal on Windows, run the following command to launch a **visible Chrome window with a dedicated profile and loopback debugging endpoint**:
 ```powershell
 & "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir="$env:LOCALAPPDATA\Google\Chrome\ScopusProfile"
@@ -226,7 +404,7 @@ In a PowerShell terminal on Windows, run the following command to launch a **vis
 > [!NOTE]
 > **Why `--user-data-dir` is required**: Modern Google Chrome requires a dedicated profile path when `--remote-debugging-port` is enabled (see [Chrome Remote Debugging Port Guide](https://developer.chrome.com/blog/remote-debugging-port)). Deriving the directory from `$env:LOCALAPPDATA\Google\Chrome\ScopusProfile` ensures your usual default Chrome profile, open tabs, personal bookmarks, and extensions remain completely separate and untouched. You do **not** need to close your daily browser.
 
-#### 2. Confirm Connection Readiness
+##### 2. Confirm Connection Readiness
 Before logging in, verify that Chrome is running and the loopback debugging endpoint is operational. Open `http://127.0.0.1:9222/json/version` in your browser or run in PowerShell:
 ```powershell
 Invoke-RestMethod http://127.0.0.1:9222/json/version
@@ -235,7 +413,7 @@ Confirm that:
 - `Browser` reports a valid Chrome version (e.g. `"Chrome/131.0.6778.86"` or similar).
 - `webSocketDebuggerUrl` is present and points to loopback (`ws://127.0.0.1:9222/...`).
 
-#### 3. Sign In to Scopus via Your Institution or Direct Account (Institution-Neutral)
+##### 3. Sign In to Scopus via Your Institution or Direct Account (Institution-Neutral)
 In the opened dedicated Chrome window:
 1. Navigate to your institution's portal or direct Scopus login:
    - **Option A (Riga Technical University)**: Go to RTU ORTUS `https://ortus.rtu.lv` -> Library -> Scopus (or directly to `https://www-scopus-com.ezproxy.rtu.lv`).
@@ -245,13 +423,13 @@ In the opened dedicated Chrome window:
    - **Zero Credential Exposure**: Passwords, MFA codes, session tokens, and cookies remain exclusively inside your browser. Northbridge never requests, logs, or stores credentials.
 3. Confirm that the main Scopus search home page (`https://www.scopus.com/search/form.uri?display=advanced` or basic search) is fully loaded in the tab.
 
-#### 4. Trigger the Live Block from Desktop Chat
+##### 4. Trigger the Live Block from Desktop Chat
 In your desktop agent chat (Antigravity, VS Code Copilot, Codex, etc.), paste the following copy-ready user prompt:
 
 > "Scopus is open and I’m signed in on port 9222. Use Northbridge to run Scopus block D3:
 > - Block: D3
 > - Claim: Weights can be derived from a rank order.
-> - Query: TITLE-ABS-KEY ( "rank order centroid" OR "surrogate weight*" OR "ranked attribute weight*" OR "rank-based weight*" )
+> - Query: TITLE-ABS-KEY ( \"rank order centroid\" OR \"surrogate weight*\" OR \"ranked attribute weight*\" OR \"rank-based weight*\" )
 > - Control paper: Decision quality using ranked attribute weights
 > - Export file: Ch3_34_SC_D3.csv
 >
@@ -259,7 +437,7 @@ In your desktop agent chat (Antigravity, VS Code Copilot, Codex, etc.), paste th
 
 Northbridge attaches to your authenticated browser session via CDP (port 9222), verifies the selected tab, executes the search without query modification, isolates preprints, verifies control paper indexing, validates the CSV export on disk before placement (preserving existing files on collision byte-for-byte), and outputs the structured search log.
 
-#### 5. Disconnection & Teardown
+##### 5. Disconnection & Teardown
 Once the search block is complete and the verified CSV is saved:
 1. Northbridge automatically closes its CDP client connection when the command finishes.
 2. Close the dedicated Chrome window manually, or terminate it from PowerShell:
@@ -276,6 +454,26 @@ Once the search block is complete and the verified CSV is saved:
 
 ---
 
+## Engine Benchmark Comparison (`Agent Browser` vs. `Playwright CDP` Prototype)
+
+A controlled benchmark (`N = 3` runs per engine) compared the project's default `exportScopusResultsTab` workflow (`agent-browser: 0.41.2` over stdio MCP) against an isolated `playwright-core` CDP prototype on the `/scopus/results-live-like?count=25` fixture exporting records `1–20` from the same external headless Chrome instance (with an unrelated tab verified untouched throughout):
+
+| Metric (N = 3 Runs per Engine) | Agent Browser (`exportScopusResultsTab`) | Playwright CDP Prototype (`scratch/pw-proto`) |
+|---|:---:|:---:|
+| **Completion Rate** | **3 / 3 (100%)** | **3 / 3 (100%)** |
+| **Retries** | `0` | `0` |
+| **Avg `browserActionMs`** | `6,755 ms` | `814 ms` |
+| **Avg `totalWallMs`** | `6,788 ms` | `937 ms` |
+| **Browser Operations per Run** | `21` MCP tool calls | `8` direct Playwright/CDP ops |
+| **Avg Observation Payload (Normalized UTF-8 Proxy)** | `10,520 bytes` (`10,518 chars`) | `200 bytes` (`200 chars`) |
+| **Model Tokens** | `null` *(not exposed by headless programmatic runner)* | `null` *(not exposed by headless programmatic runner)* |
+| **Unrelated Tab Untouched** | Verified (`true`) | Verified (`true`) |
+
+- **Metric Distinctions**: `browserActionMs` measures active browser automation through verified CSV placement; `totalWallMs` includes client setup; `obsBytes` measures normalized UTF-8 observation text returned during browser steps (`null` for `modelTokens` indicates runtime non-exposure rather than zero tokens).
+- **Engineering Decision**: Keep **Agent Browser** as the project default. Agent Browser preserves compact accessibility-tree exploration on arbitrary or unfamiliar pages, matches our existing `northbridge-research` and `northbridge-browser` architecture, and requires **zero new dependencies** in `package.json` or `package-lock.json` (Playwright required `{ exact: true }` strict locator disambiguation on checkboxes such as `"Abstract"` vs `"Abstract & keywords"`, and `playwright-core` was never added to repo dependencies). Direct CDP scripting via Playwright remains an optional future optimization strictly for high-volume fixed-DOM batch loops if latency becomes material.
+
+---
+
 ## Visual Studio Code Installation (One-Click)
 
 Visual Studio Code natively supports Model Context Protocol (MCP) servers in AI agent chat (such as GitHub Copilot in Agent Mode).
@@ -283,7 +481,7 @@ Visual Studio Code natively supports Model Context Protocol (MCP) servers in AI 
 ### 1. One-Click Install Link (Status: Pending Registry Publication)
 
 > [!WARNING]
-> **Pending Verification Status**: The one-click install link below is marked **Pending** until the `northbridge-browser` npm package is published to the public registry or the deep-link registration is independently verified in a clean Windows setup without prior local dependencies. For current local development and evaluation, use the verified [Workspace Configuration (Local Clone)](#workspace-configuration-fallback-local-clone) below.
+> **Pending Verification Status**: The one-click install link below is marked **Pending** until the `northbridge-browser` npm package is published to the public registry or the deep-link registration is independently verified in a clean Windows setup without prior local dependencies. For current local development and evaluation, use the verified [Workspace Configuration (Local Clone)](#4-workspace-configuration-fallback-local-clone) below.
 
 Click the link below to configure Northbridge Browser directly in VS Code (once published):
 
@@ -325,18 +523,37 @@ If working directly inside a clone of this repository, VS Code automatically rea
       "env": {
         "AGENT_BROWSER_ALLOWED_DOMAINS": "127.0.0.1"
       }
+    },
+    "northbridge-scopus": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/bin/northbridge-scopus-mcp.mjs"
+      ]
+    },
+    "northbridge-summarize": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/bin/northbridge-summarize-mcp.mjs"
+      ],
+      "env": {
+        "NORTHBRIDGE_APPROVED_DOMAINS": ""
+      }
     }
   }
 }
 ```
-`${workspaceFolder}/bin/northbridge-browser.js` provides a stable package entry point that launches without developer-specific absolute paths on Windows across directories containing spaces and Unicode.
+Using `${workspaceFolder}/bin/*.js|mjs` provides stable package entry points that launch cleanly without developer-specific absolute paths on Windows across directories containing spaces and Unicode, while keeping `northbridge-browser-research` excluded by default.
 
-### 5. Asking for Northbridge Browser in VS Code Agent Chat
-In VS Code, open the Chat view (`Ctrl+Alt+I`), ensure **Agent Mode** is selected, and reference Northbridge Browser by name:
+### 5. Asking for Northbridge in VS Code Agent Chat
+In VS Code, open the Chat view (`Ctrl+Alt+I`), ensure **Agent Mode** is selected, and ask in plain language:
 
 > "Use Northbridge Browser to find the application deadline for MSc Applied Data Science at http://127.0.0.1:4317/. Tell me the deadline and the page you used."
+> "Use Northbridge to summarize this page"
+> "Use Northbridge to export the first 20 Scopus results"
 
-The agent discovers the 29 `agent_browser_*` MCP tools, navigates to the portal, inspects the page structure, follows the link, reads the deadline (**21 May 2027**), and cites the source page.
+The agent routes automatically to the appropriate tool (`agent_browser_*`, `northbridge_summarize_page`, or `northbridge_export_scopus_results`) without requiring browser engine names, selectors, or element refs.
 
 ### Why No VS Code Extension is Required
 VS Code provides native MCP support via `.vscode/mcp.json` and the `vscode:mcp/install` URI handler. Custom VS Code extensions are only needed when accessing editor-internal APIs (such as text editor selections or language servers). Because Northbridge Browser operates strictly over local stdio MCP, the native install link and workspace configuration deliver the full user experience without the complexity of an extension.
@@ -459,7 +676,7 @@ The mock admissions portal and demo browser operate under strict isolation contr
 Coding agents that support Model Context Protocol (MCP) over `stdio` can launch the project-local `northbridge-browser` server.
 
 ### Why `--tools core`?
-Agent Browser exposes 156 typed tools under `--tools all`. Launching with `--tools core` (the default in `bin/northbridge-browser.js`) filters this to **29 essential tools** (navigation, accessibility snapshots, clicking, filling, waiting, reading, eval, and closing). This drastically reduces token overhead in the agent's system prompt while providing all capabilities needed for web automation.
+Agent Browser `0.41.2` exposes **64 typed tools** under `--tools all` (measured directly via `mcp tools/list`). Note that `frame` and `scrollintoview` are CLI-only subcommands (`.\node_modules\.bin\agent-browser.cmd frame <selector|main>`, absent from both `--tools core` and `--tools all` MCP surfaces), whereas `agent_browser_scroll` is exposed in `--tools core`. Launching with `--tools core` (the default in `bin/northbridge-browser.js`) limits MCP discovery to **29 essential tools** (navigation, accessibility snapshots, clicking, filling, waiting, reading, scrolling, screenshots, eval, tab basics, and closing). This cuts prompt token overhead while keeping every core interactive browser action available.
 
 ### Windows Subprocess Batch Hardening (CVE-2024-27980)
 > [!IMPORTANT]
@@ -479,6 +696,21 @@ Where `<CHECKOUT_PATH>` is the absolute path to your cloned repository:
       ],
       "env": {
         "AGENT_BROWSER_ALLOWED_DOMAINS": "127.0.0.1"
+      }
+    },
+    "northbridge-scopus": {
+      "command": "node",
+      "args": [
+        "<CHECKOUT_PATH>/bin/northbridge-scopus-mcp.mjs"
+      ]
+    },
+    "northbridge-summarize": {
+      "command": "node",
+      "args": [
+        "<CHECKOUT_PATH>/bin/northbridge-summarize-mcp.mjs"
+      ],
+      "env": {
+        "NORTHBRIDGE_APPROVED_DOMAINS": ""
       }
     }
   }
@@ -510,17 +742,30 @@ Where `<CHECKOUT_PATH>` is the absolute path to your cloned repository:
 
 ## Client-Specific Guides
 
+### Client Setup & Honest Verification Status
+
+| Client | Configuration Path & Servers | Discovery Tooling | Honest Verification Status on Windows |
+|---|---|---|---|
+| **VS Code (Agent Mode)** | `.vscode/mcp.json` (workspace auto-discovered: `northbridge-browser`, `northbridge-scopus`, `northbridge-summarize` with `NORTHBRIDGE_APPROVED_DOMAINS=""`) | Built-in web/repo context or user-provided URL | **Workspace config verified in local tests**; 1-click npm install link **Pending** npm publication. |
+| **Google Antigravity** | `~/.gemini/config/mcp_config.json` (global) | Built-in `search_web` | **Fresh plain-language chat tested (`e32f48a4`)**: under unmodified global config (`agent-browser` locked to `127.0.0.1` only), `search_web` Discovery succeeded while external reads blocked cleanly (`[APPROVAL REQUIRED]` / loopback domain allowlist). Loopback local demo verified in real Antigravity chat. |
+| **Cursor** | `.cursor/mcp.json` | Cursor Web / Search | Configuration documented; **Unverified live on Cursor** (needs owner live test if used). |
+| **OpenAI Codex (CLI)** | `.codex/config.toml` / `~/.codex/config.toml` (`codex mcp add ...`) | Codex web search / shell | Verified local loopback demo in Codex chat & CLI (`BENCHMARK.md`, local preview); plain-language `northbridge-summarize` / `northbridge-scopus` MCP registration **Unverified live in Codex**. |
+| **Claude Desktop** | `%APPDATA%\Claude\claude_desktop_config.json` | Host search / fetch (if enabled) | Configuration documented; **Unverified live on Claude Desktop** on Windows. |
+| **ChatGPT Desktop** | Settings > Developer > MCP Servers (`stdio`) | Host search / web UI (local stdio on Windows Desktop) | Configuration documented; **Unverified live on ChatGPT Desktop** on Windows. |
+
+---
+
 ### Visual Studio Code
-See [Visual Studio Code Installation](#visual-studio-code-installation-one-click) at the top of this guide for the 1-click install link and `.vscode/mcp.json` workspace configuration.
+See [Visual Studio Code Installation](#visual-studio-code-installation-one-click) above for the 1-click install link and `.vscode/mcp.json` workspace configuration.
 
 ---
 
 ---
 
 ### Claude Desktop (Windows)
-To connect Northbridge Browser to Claude Desktop on Windows:
+To connect Northbridge Browser, Scopus Export, and Page Summary to Claude Desktop on Windows:
 1. Open `%APPDATA%\Claude\claude_desktop_config.json` in your editor.
-2. Add the `northbridge-browser` definition:
+2. Add the three server entries:
    ```json
    {
      "mcpServers": {
@@ -532,11 +777,26 @@ To connect Northbridge Browser to Claude Desktop on Windows:
          "env": {
            "AGENT_BROWSER_ALLOWED_DOMAINS": "127.0.0.1"
          }
+       },
+       "northbridge-scopus": {
+         "command": "node",
+         "args": [
+           "C:/path/to/university-browser-demo/bin/northbridge-scopus-mcp.mjs"
+         ]
+       },
+       "northbridge-summarize": {
+         "command": "node",
+         "args": [
+           "C:/path/to/university-browser-demo/bin/northbridge-summarize-mcp.mjs"
+         ],
+         "env": {
+           "NORTHBRIDGE_APPROVED_DOMAINS": ""
+         }
        }
      }
    }
    ```
-3. Restart Claude Desktop. The hammer icon will show the 29 available browser tools.
+3. Restart Claude Desktop. The hammer icon will expose the 29 loopback browser tools plus `northbridge_export_scopus_results` and `northbridge_summarize_page`.
 
 ---
 
@@ -545,7 +805,7 @@ To connect Northbridge Browser to Claude Desktop on Windows:
 ### ChatGPT Desktop (Windows)
 In ChatGPT Desktop:
 1. Navigate to **Settings > Developer > MCP Servers > Add New Server**.
-2. Configure:
+2. Configure `northbridge-browser` (and optionally `northbridge-scopus` / `northbridge-summarize`):
    - **Name**: `northbridge-browser`
    - **Transport**: `stdio`
    - **Command**: `node`
@@ -558,25 +818,35 @@ In ChatGPT Desktop:
 
 ### OpenAI Codex (CLI)
 
-#### 1. Adding the MCP Server
+#### 1. Adding the MCP Servers
 The Codex CLI uses POSIX-style argument parsing. Environment flags must precede the `--` separator, followed by the command and arguments:
 
 ```powershell
 $checkout = (Get-Location).Path
-$entrypoint = Join-Path $checkout 'bin/northbridge-browser.js'
-codex mcp add agent-browser --env AGENT_BROWSER_ALLOWED_DOMAINS=127.0.0.1 -- node $entrypoint mcp --tools core
+codex mcp add northbridge-browser --env AGENT_BROWSER_ALLOWED_DOMAINS=127.0.0.1 -- node (Join-Path $checkout 'bin/northbridge-browser.js')
+codex mcp add northbridge-scopus -- node (Join-Path $checkout 'bin/northbridge-scopus-mcp.mjs')
+codex mcp add northbridge-summarize --env NORTHBRIDGE_APPROVED_DOMAINS= -- node (Join-Path $checkout 'bin/northbridge-summarize-mcp.mjs')
 ```
 
 **Using `config.toml` (`.codex/config.toml` or `~/.codex/config.toml`):**
 ```toml
-[mcp_servers.agent-browser]
+[mcp_servers.northbridge-browser]
 command = "node"
-args = [
-  "C:/path/to/project/bin/northbridge-browser.js"
-]
+args = ["C:/path/to/university-browser-demo/bin/northbridge-browser.js"]
 
-[mcp_servers.agent-browser.env]
+[mcp_servers.northbridge-browser.env]
 AGENT_BROWSER_ALLOWED_DOMAINS = "127.0.0.1"
+
+[mcp_servers.northbridge-scopus]
+command = "node"
+args = ["C:/path/to/university-browser-demo/bin/northbridge-scopus-mcp.mjs"]
+
+[mcp_servers.northbridge-summarize]
+command = "node"
+args = ["C:/path/to/university-browser-demo/bin/northbridge-summarize-mcp.mjs"]
+
+[mcp_servers.northbridge-summarize.env]
+NORTHBRIDGE_APPROVED_DOMAINS = ""
 ```
 
 #### 2. Authentication Modes
@@ -595,19 +865,28 @@ Create `.cursor/mcp.json` in your workspace root:
 ```json
 {
   "mcpServers": {
-    "agent-browser": {
+    "northbridge-browser": {
       "command": "node",
-      "args": [
-        "C:/path/to/project/bin/northbridge-browser.js"
-      ],
+      "args": ["C:/path/to/university-browser-demo/bin/northbridge-browser.js"],
       "env": {
         "AGENT_BROWSER_ALLOWED_DOMAINS": "127.0.0.1"
+      }
+    },
+    "northbridge-scopus": {
+      "command": "node",
+      "args": ["C:/path/to/university-browser-demo/bin/northbridge-scopus-mcp.mjs"]
+    },
+    "northbridge-summarize": {
+      "command": "node",
+      "args": ["C:/path/to/university-browser-demo/bin/northbridge-summarize-mcp.mjs"],
+      "env": {
+        "NORTHBRIDGE_APPROVED_DOMAINS": ""
       }
     }
   }
 }
 ```
-Or add it via **Cursor Settings > Features > MCP > Add New MCP Server**.
+Or add them via **Cursor Settings > Features > MCP > Add New MCP Server**.
 
 #### 2. Authentication Modes
 - **Cursor Subscription Mode**: Sign in to your Cursor account in the IDE.
@@ -619,19 +898,30 @@ Or add it via **Cursor Settings > Features > MCP > Add New MCP Server**.
 
 ### Google Antigravity
 
-#### 1. Configuration
-Add the server entry to `mcp_config.json` in your workspace or global config (`~/.gemini/config/mcp_config.json`):
+#### 1. Configuration & Default State Note
+In this workspace environment, global `~/.gemini/config/mcp_config.json` registers only `agent-browser` (`AGENT_BROWSER_ALLOWED_DOMAINS="127.0.0.1"`), without auto-registering `.vscode/mcp.json`'s `northbridge-summarize` or `northbridge-scopus`. A fresh plain-language Antigravity subagent test (`e32f48a4`) under unmodified global configuration confirmed that Discovery (`search_web`) works immediately, while external browsing via `agent-browser` and `northbridge-summarize` halts cleanly at `Domain '...' is not in the allowed domains list` and `[APPROVAL REQUIRED]`.
+
+To expose the workspace servers directly inside Antigravity, add the entries below to `~/.gemini/config/mcp_config.json` (setting `NORTHBRIDGE_APPROVED_DOMAINS` explicitly to any public domains you approve for URL summarization):
 
 ```json
 {
   "mcpServers": {
-    "agent-browser": {
+    "northbridge-browser": {
       "command": "node",
-      "args": [
-        "C:/path/to/project/bin/northbridge-browser.js"
-      ],
+      "args": ["C:/path/to/university-browser-demo/bin/northbridge-browser.js"],
       "env": {
         "AGENT_BROWSER_ALLOWED_DOMAINS": "127.0.0.1"
+      }
+    },
+    "northbridge-scopus": {
+      "command": "node",
+      "args": ["C:/path/to/university-browser-demo/bin/northbridge-scopus-mcp.mjs"]
+    },
+    "northbridge-summarize": {
+      "command": "node",
+      "args": ["C:/path/to/university-browser-demo/bin/northbridge-summarize-mcp.mjs"],
+      "env": {
+        "NORTHBRIDGE_APPROVED_DOMAINS": ""
       }
     }
   }
@@ -705,17 +995,28 @@ $browserArgs = @('--session', $session, '--allowed-domains', '127.0.0.1')
 
 ## Automated Verification Scripts
 
-Three self-contained automated acceptance test scripts are included in the repository. They execute against `http://127.0.0.1:4317/`, verify all synthetic applicant data, validate the exact `Draft` status, and stop at the human review checkpoint.
+Six automated acceptance & regression test suites are included in the repository:
 
 ```powershell
-# 1. Run MCP Acceptance Test (15 tool calls over stdio)
+# Self-contained suites (auto-manage local fixture / headless Chrome):
+# 1. Scopus Search, Attachment & Repeatable 1-20 CSV Export Suite (28/28 checks)
+npm.cmd run test:scopus
+
+# 2. Read-Only Page Summary, Interactive Reveal & MCP UX Suite (11/11 checks)
+npm.cmd run test:summary
+
+# Suites expecting the local portal server running (`npm.cmd start` on port 4317):
+# 3. Admissions Demo MCP Acceptance Test (15 tool calls over stdio)
 npm.cmd run test:mcp
 
-# 2. Run PowerShell CLI Acceptance Test (15 CLI process spawns)
+# 4. Admissions Demo PowerShell CLI Acceptance Test (15 CLI process spawns)
 npm.cmd run test:cli
 
-# 3. Run Scripted MCP Deadline Lookup Test (stdio)
+# 5. Admissions Demo Scripted MCP Deadline Lookup Test (stdio)
 npm.cmd run test:lookup
+
+# 6. Research Access Policy & Isolation Suite (9/9 checks; reproduces upstream connection-time IP gap)
+npm.cmd run test:research
 ```
 
 ---
@@ -801,16 +1102,18 @@ Close only the specific demo session (preserving any unrelated browser sessions)
 Press `Ctrl+C` in the terminal running `npm.cmd start`.
 
 ### 3. Remove Project MCP Registration
-Remove only this project's server definition:
-- **VS Code**: Run Command Palette (`Ctrl+Shift+P`) -> `MCP: Remove Server` and choose `northbridge-browser`, or open `.vscode/mcp.json` / User `mcp.json` and remove only the `"northbridge-browser"` block.
+Remove only this project's server entries (`northbridge-browser`, `northbridge-scopus`, `northbridge-summarize`):
+- **VS Code**: Run Command Palette (`Ctrl+Shift+P`) -> `MCP: Remove Server` or edit `.vscode/mcp.json` / User `mcp.json`.
 - **Codex**:
   ```powershell
-  codex mcp remove agent-browser
+  codex mcp remove northbridge-browser
+  codex mcp remove northbridge-scopus
+  codex mcp remove northbridge-summarize
   ```
-- **Cursor**: In `.cursor/mcp.json`, remove only the `"agent-browser"` server entry, preserving any other MCP servers and configuration.
-- **Antigravity**: In `mcp_config.json`, remove only the `"agent-browser"` entry, preserving any other MCP servers and settings.
-- **Claude Desktop**: In `%APPDATA%\Claude\claude_desktop_config.json`, remove only the `"northbridge-browser"` block.
-- **ChatGPT Desktop**: In Settings > Developer > MCP Servers, delete `northbridge-browser`.
+- **Cursor**: In `.cursor/mcp.json`, remove the `northbridge-browser`, `northbridge-scopus`, and `northbridge-summarize` entries, preserving any other MCP servers.
+- **Antigravity**: In `mcp_config.json`, remove the `northbridge-browser`, `northbridge-scopus`, and `northbridge-summarize` entries, preserving any other MCP servers.
+- **Claude Desktop**: In `%APPDATA%\Claude\claude_desktop_config.json`, remove only the project's `northbridge-*` blocks.
+- **ChatGPT Desktop**: In Settings > Developer > MCP Servers, remove the project's `northbridge-*` server entries.
 
 *(Existing client logins, accounts, and other MCP servers remain completely untouched.)*
 
