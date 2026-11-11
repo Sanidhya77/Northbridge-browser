@@ -27,7 +27,7 @@ npm.cmd ci
 - **Professor / Topic Research Prompt** *(Discovery + Public Page Verification)*:
   > "Use Northbridge to research Prof. [Full Name]'s main research areas and summarize one open-access paper with exact source URLs and any blocks or limits."
 
-  - **How it runs**: The chat client uses its own search tool (**Discover**) to find candidate URLs, then calls `northbridge_summarize_page` (**Orient -> Read -> Reveal -> Verify -> Compact Output**) on public URLs whose hosts are pre-authorized in `NORTHBRIDGE_APPROVED_DOMAINS` (for example `cs.ox.ac.uk,arxiv.org`).
+  - **How it runs**: The chat client calls `northbridge_search_web` to find candidate URLs, then `northbridge_summarize_page` to verify selected sources on hosts already configured in `NORTHBRIDGE_APPROVED_DOMAINS` (for example `mbzuai.ac.ae,arxiv.org`).
   - **Default `.vscode/mcp.json` boundary**: `NORTHBRIDGE_APPROVED_DOMAINS` ships as `""` by default so public URLs halt with `[APPROVAL REQUIRED]` unless explicitly allowlisted by you in MCP configuration (or opened in an approved Chrome tab).
 
 - **Current-Page / Open-Tab Summary Prompt** *(Approved Read-Only Chrome Tab)*:
@@ -177,6 +177,14 @@ node bin/northbridge-scopus.mjs export --auto-connect --approved --profile-dir "
 ---
 
 ## Read-Only Page Summary Pilot (`northbridge-summarize`)
+
+### Search and verify from chat
+
+The same MCP server exposes `northbridge_search_web` in addition to `northbridge_summarize_page`. Set `NORTHBRIDGE_BRAVE_SEARCH_API_KEY` in the local MCP server environment and reconnect the client. Keep the key out of the repository. Northbridge sends search queries to the [Brave Search API](https://api-dashboard.search.brave.com/documentation/guides/authentication).
+
+Try: “Use Northbridge to find Chun Jason Xue’s official faculty page and the FlexInfer paper. Open the best match for each with Northbridge and report what you could read.”
+
+Search returns ranked candidate links and short snippets. A search hit does not approve its domain or verify its page content. The page reader uses `NORTHBRIDGE_APPROVED_DOMAINS` for public URLs and reports access challenges through its existing page status. If a result’s host is outside the allowlist, Northbridge can still return the lead and will stop at the page-read gate.
 
 The read-only summary engine ([`page-summary.mjs`](page-summary.mjs), [`bin/northbridge-summarize.mjs`](bin/northbridge-summarize.mjs), [`bin/northbridge-summarize-mcp.mjs`](bin/northbridge-summarize-mcp.mjs)) implements the 6-step **Discover -> Orient -> Read -> Reveal -> Verify -> Compact Output** workflow with zero screenshots unless `--screenshot-reason` / `screenshotReason` is explicitly supplied for a chart, image, or layout. All extracted content is framed strictly inside `[UNTRUSTED EXTERNAL DATA - BEGIN]` / `[UNTRUSTED EXTERNAL DATA - END]` with credential/token query redaction (`sanitizeUrl`).
 
