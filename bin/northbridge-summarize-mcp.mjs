@@ -190,7 +190,7 @@ const TOOLS = [
   },
   {
     name: 'northbridge_read_public_page',
-    description: 'Open a public HTTPS source without per-domain setup and return its final URL, page status, and a short text excerpt. Static HTML and plain text only.',
+    description: 'Open a public HTTPS source without per-domain setup and return its final URL, page status, and a short text excerpt. Static HTML and plain text by default, with opt-in DOCX text extraction and attachment link discovery.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -198,11 +198,21 @@ const TOOLS = [
       properties: {
         url: { type: 'string', maxLength: 4096 },
         section: { type: 'string', maxLength: 120, description: 'Optional heading to focus on, such as Abstract.' },
-        maxChars: { type: 'integer', minimum: 200, maximum: 2000, default: 1000 },
+        maxChars: { type: 'integer', minimum: 200, maximum: 5000, default: 1000 },
         rendered_fallback: {
           type: 'boolean',
           default: false,
           description: 'Opt-in: use Agent Browser rendered accessibility snapshot if direct HTTPS reader returns unsupported_content or no readable text.'
+        },
+        attachment: {
+          type: 'string',
+          maxLength: 120,
+          description: 'Optional name, keyword, or extension to discover matching attachment links (e.g. "Annex 2" or "docx").'
+        },
+        extract_docx: {
+          type: 'boolean',
+          default: false,
+          description: 'Opt-in: extract readable plain text, headings, and tables from a public DOCX document.'
         }
       }
     }
@@ -222,7 +232,9 @@ async function handleToolCall(id, params) {
       url: args.url,
       section: args.section,
       maxChars: args.maxChars,
-      rendered_fallback: args.rendered_fallback ?? args.renderedFallback
+      rendered_fallback: args.rendered_fallback ?? args.renderedFallback,
+      attachment: args.attachment ?? args.attachment_name,
+      extract_docx: args.extract_docx ?? args.extractDocx
     });
     writeJsonRpc({
       jsonrpc: '2.0',
