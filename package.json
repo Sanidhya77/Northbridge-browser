@@ -18,7 +18,9 @@
     "test:lookup": "node test-mcp-lookup.mjs",
     "test:research": "node test-research-policy.mjs",
     "test:scopus": "node test-scopus-acceptance.mjs",
-    "test:summary": "node test-page-summary.mjs"
+    "test:summary": "node test-page-summary.mjs",
+    "test:search": "node --test test-web-search.mjs",
+    "test:public-page": "node --test test-public-page.mjs"
   },
   "dependencies": {
     "agent-browser": "0.41.2"

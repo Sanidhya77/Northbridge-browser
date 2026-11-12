@@ -14,7 +14,10 @@
 
 import path from 'node:path';
 import readline from 'node:readline';
-import { searchWeb } from '../web-search.mjs';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { searchWeb, searchWebWithContext } from '../web-search.mjs';
+import { readPublicPage } from '../public-page.mjs';
 import {
   summarizeApprovedTab,
   summarizePublicUrl,
@@ -35,6 +38,23 @@ function resolveStartupApprovedDomains() {
 }
 
 const SERVER_APPROVED_DOMAINS = resolveStartupApprovedDomains();
+const execFileAsync = promisify(execFile);
+
+async function readBraveKey() {
+  const key = process.env.NORTHBRIDGE_BRAVE_SEARCH_API_KEY?.trim();
+  if (key || process.platform !== 'win32') return key ?? '';
+
+  // A Windows MCP launcher may pass a filtered environment to its child process.
+  const registryTool = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'reg.exe');
+  try {
+    const { stdout } = await execFileAsync(registryTool, [
+      'query', 'HKCU\\Environment', '/v', 'NORTHBRIDGE_BRAVE_SEARCH_API_KEY'
+    ], { windowsHide: true, timeout: 2000, maxBuffer: 4096 });
+    return stdout.match(/^[ \t]*NORTHBRIDGE_BRAVE_SEARCH_API_KEY[ \t]+REG_(?:EXPAND_)?SZ[ \t]+([^\r\n]+)/mi)?.[1].trim() ?? '';
+  } catch {
+    return '';
+  }
+}
 
 const TOOLS = [
   {
@@ -138,14 +158,47 @@ const TOOLS = [
     name: 'northbridge_search_web',
     description:
       'Find public webpages by keyword using Northbridge and Brave Search. Returns ranked candidate URLs, titles, and short unverified snippets. ' +
-      'Requires a server-configured search API key. Verify selected sources with northbridge_summarize_page, which enforces the approved-domain policy.',
+      'Set indexed_excerpts:true to use Brave\'s LLM Context API and return at most two source URLs with one short indexed excerpt per source ' +
+      '(labelled "indexed excerpt"; provider-indexed, not a live read). ' +
+      'Requires a server-configured search API key. Verify selected sources with northbridge_read_public_page.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       required: ['query'],
       properties: {
         query: { type: 'string', minLength: 1, maxLength: 600 },
-        limit: { type: 'integer', minimum: 1, maximum: 10, default: 5 }
+        limit: { type: 'integer', minimum: 1, maximum: 10, default: 5 },
+        indexed_excerpts: {
+          type: 'boolean',
+          default: false,
+          description: 'Opt-in: use Brave LLM Context API to get at most two indexed excerpts. Each is labelled "indexed excerpt" and must not be used in place of a live read.'
+        },
+        target_url: {
+          type: 'string',
+          description: 'Optional target page URL to inspect passages for a specific page when indexed_excerpts is true.'
+        },
+        site: {
+          type: 'string',
+          description: 'Optional domain/site filter for indexed search, such as kaust.edu.sa.'
+        },
+        section: {
+          type: 'string',
+          description: 'Optional section heading or row to look for in the indexed passages when indexed_excerpts is true.'
+        }
+      }
+    }
+  },
+  {
+    name: 'northbridge_read_public_page',
+    description: 'Open a public HTTPS source without per-domain setup and return its final URL, page status, and a short text excerpt. Static HTML and plain text only.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['url'],
+      properties: {
+        url: { type: 'string', maxLength: 4096 },
+        section: { type: 'string', maxLength: 120, description: 'Optional heading to focus on, such as Abstract.' },
+        maxChars: { type: 'integer', minimum: 200, maximum: 2000, default: 1000 }
       }
     }
   }
@@ -159,12 +212,43 @@ async function handleToolCall(id, params) {
   const toolName = params?.name;
   const args = params?.arguments || {};
 
+  if (toolName === 'northbridge_read_public_page') {
+    const page = await readPublicPage({ url: args.url, section: args.section, maxChars: args.maxChars });
+    writeJsonRpc({
+      jsonrpc: '2.0',
+      id,
+      result: { content: [{ type: 'text', text: '[UNTRUSTED EXTERNAL DATA] ' + JSON.stringify(page) }] }
+    });
+    return;
+  }
+
   if (toolName === 'northbridge_search_web') {
-    const result = await searchWeb({ query: args.query, limit: args.limit });
+    const options = {
+      query: args.query,
+      limit: args.limit,
+      site: args.site,
+      target_url: args.target_url || args.targetUrl,
+      section: args.section
+    };
+    const credentials = { apiKey: await readBraveKey() };
+    if (args.indexed_excerpts === true) {
+      const indexed = await searchWebWithContext(options, credentials);
+      const text = indexed.ok
+        ? '[UNTRUSTED EXTERNAL DATA] ' + JSON.stringify(indexed)
+        : indexed.status + ": " + indexed.error;
+      writeJsonRpc({
+        jsonrpc: '2.0',
+        id,
+        result: { isError: !indexed.ok, content: [{ type: 'text', text }] }
+      });
+      return;
+    }
+
+    const result = await searchWeb(options, credentials);
     const content = result.ok
       ? '[UNTRUSTED EXTERNAL DATA] Search results are leads. Verify selected pages before citing their content.\n' +
-        (result.results.map(({ title, url, snippet }) => `${title}\n${url}\n${snippet}`).join('\n\n') || 'No results.')
-      : `${result.status}: ${result.error}`;
+      (result.results.map(({ title, url, snippet }) => [title, url, snippet].join('\n')).join('\n\n') || 'No results.')
+      : result.status + ": " + result.error;
     writeJsonRpc({
       jsonrpc: '2.0',
       id,

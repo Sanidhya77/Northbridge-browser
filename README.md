@@ -27,7 +27,7 @@ npm.cmd ci
 - **Professor / Topic Research Prompt** *(Discovery + Public Page Verification)*:
   > "Use Northbridge to research Prof. [Full Name]'s main research areas and summarize one open-access paper with exact source URLs and any blocks or limits."
 
-  - **How it runs**: The chat client calls `northbridge_search_web` to find candidate URLs, then `northbridge_summarize_page` to verify selected sources on hosts already configured in `NORTHBRIDGE_APPROVED_DOMAINS` (for example `mbzuai.ac.ae,arxiv.org`).
+  - **How it runs**: The chat client calls `northbridge_search_web` to find candidate URLs, then `northbridge_read_public_page` for a short excerpt and status from each selected public source.
   - **Default `.vscode/mcp.json` boundary**: `NORTHBRIDGE_APPROVED_DOMAINS` ships as `""` by default so public URLs halt with `[APPROVAL REQUIRED]` unless explicitly allowlisted by you in MCP configuration (or opened in an approved Chrome tab).
 
 - **Current-Page / Open-Tab Summary Prompt** *(Approved Read-Only Chrome Tab)*:
@@ -68,7 +68,7 @@ The agent discovers candidate sources using its search capability, opens officia
 
 ### How the Workflow Operates
 
-1. **Source Discovery**: The desktop agent uses its built-in search tool (or user guidance) to locate official university admissions portals.
+1. **Source Discovery**: The desktop agent uses Northbridge search to locate official university admissions portals or starts from a supplied URL.
 2. **Page Reading & Verification**: The agent calls Northbridge Browser (`agent_browser_open`, `agent_browser_snapshot`, `agent_browser_read`) to inspect structured accessibility trees with element references (`@ref`).
 3. **Safety & Read-Only Confinement**: Public research mode exposes a safe, read-only profile. Form inputs, submissions, cookies, and script evaluation are disabled.
 4. **Answer with Citations**: The agent verifies each finding against the observed page text, cites the exact URLs read, and explicitly flags any unverified or missing details.
@@ -184,13 +184,15 @@ The same MCP server exposes `northbridge_search_web` in addition to `northbridge
 
 Try: “Use Northbridge to find Chun Jason Xue’s official faculty page and the FlexInfer paper. Open the best match for each with Northbridge and report what you could read.”
 
-Search returns ranked candidate links and short snippets. A search hit does not approve its domain or verify its page content. The page reader uses `NORTHBRIDGE_APPROVED_DOMAINS` for public URLs and reports access challenges through its existing page status. If a result’s host is outside the allowlist, Northbridge can still return the lead and will stop at the page-read gate.
+Set `indexed_excerpts: true` on `northbridge_search_web` to get up to two short, labelled Brave LLM Context passages. Supply `site` to restrict results to a university hostname and its subdomains when the page URL is unknown. Use a live read to verify time-sensitive claims.
+
+Search returns ranked candidate links and short snippets. Use `northbridge_read_public_page` to verify the resulting URL and extract a short excerpt. It connects to a checked public IPv4 address over HTTPS on port 443 and validates each redirect before connecting. It sends no cookies or authentication headers, does not execute scripts or load embedded resources, and reports access challenges, missing text, and unsupported content. It supports static HTML and plain text. `northbridge_summarize_page` remains available for rendered pages with approved domains or an approved Chrome tab.
 
 The read-only summary engine ([`page-summary.mjs`](page-summary.mjs), [`bin/northbridge-summarize.mjs`](bin/northbridge-summarize.mjs), [`bin/northbridge-summarize-mcp.mjs`](bin/northbridge-summarize-mcp.mjs)) implements the 6-step **Discover -> Orient -> Read -> Reveal -> Verify -> Compact Output** workflow with zero screenshots unless `--screenshot-reason` / `screenshotReason` is explicitly supplied for a chart, image, or layout. All extracted content is framed strictly inside `[UNTRUSTED EXTERNAL DATA - BEGIN]` / `[UNTRUSTED EXTERNAL DATA - END]` with credential/token query redaction (`sanitizeUrl`).
 
 ### 6-Step Read, Navigate & Verify Loop
 
-1. **Discover** *(outside the browser verifier)*: Use the client's search tool when the user gives a topic without a URL, or ask for a starting page; keep search discovery distinct from live page verification.
+1. **Discover**: Call Northbridge search for a topic or use a supplied URL. Read the selected source to verify its content.
 2. **Orient**: Read page title, redacted URL, full headings outline, compact accessibility snapshot, interactive controls (`tabs`, `accordions`, `pagination`, `load-more`), and `inaccessibleSections` (canvas/`application` widgets or `<iframe>` controls where `agent_browser_frame` is CLI-only).
 3. **Read**: Extract focused paginated prose (`--section`, `--section-index`, `--max-chars`, `--offset`), structured `tables` bounded by `--max-table-rows` (default `20`), redacted `links`, and automatic Shadow DOM / accessible iframe fallback whenever `agent_browser_read` omits visible DOM text.
 4. **Reveal** *(`--reveal` / `reveal`)*: Safely activates non-utility tabs, `<details>`/`[aria-expanded=false]` accordions (skipping utility toggles such as `Skip To Content` or `Open ... menu`), `Next` pagination, or `Load more` (scrolling off-viewport targets once if needed) within bounded settle polling.
