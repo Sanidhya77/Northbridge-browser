@@ -198,7 +198,12 @@ const TOOLS = [
       properties: {
         url: { type: 'string', maxLength: 4096 },
         section: { type: 'string', maxLength: 120, description: 'Optional heading to focus on, such as Abstract.' },
-        maxChars: { type: 'integer', minimum: 200, maximum: 2000, default: 1000 }
+        maxChars: { type: 'integer', minimum: 200, maximum: 2000, default: 1000 },
+        rendered_fallback: {
+          type: 'boolean',
+          default: false,
+          description: 'Opt-in: use Agent Browser rendered accessibility snapshot if direct HTTPS reader returns unsupported_content or no readable text.'
+        }
       }
     }
   }
@@ -213,7 +218,12 @@ async function handleToolCall(id, params) {
   const args = params?.arguments || {};
 
   if (toolName === 'northbridge_read_public_page') {
-    const page = await readPublicPage({ url: args.url, section: args.section, maxChars: args.maxChars });
+    const page = await readPublicPage({
+      url: args.url,
+      section: args.section,
+      maxChars: args.maxChars,
+      rendered_fallback: args.rendered_fallback ?? args.renderedFallback
+    });
     writeJsonRpc({
       jsonrpc: '2.0',
       id,
