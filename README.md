@@ -14,7 +14,17 @@ This is a Windows pilot. The source and setup below are on [`pilot-live-scopus-v
 | Try browser actions locally | `northbridge-browser` server | Agent Browser tools for the loopback demo. The workspace config restricts the server to `127.0.0.1`. |
 | Export a Scopus results range | `northbridge_export_scopus_results` | CSV export from a user-approved results tab in a dedicated Chrome profile. This is an optional pilot workflow. |
 
-## Install from GitHub
+## Install
+
+### From npm
+
+Install the package into your project or workspace:
+
+```powershell
+npm.cmd install @sanidhya77/northbridge-browser
+```
+
+### From GitHub
 
 Use PowerShell with Git, Node.js 24 or newer, npm, and a desktop MCP client that can launch a local stdio server.
 
@@ -36,11 +46,49 @@ The direct public-page reader and DOCX extraction do not launch Chrome. You can 
 
 ### VS Code with GitHub Copilot
 
-1. Open the cloned **Northbridge-browser** folder in VS Code. It includes [`.vscode/mcp.json`](.vscode/mcp.json).
-2. Open that file and start **northbridge-summarize**, or use **MCP: Show Installed Servers** in the Command Palette. Review the local launch command if prompted.
-3. Open Copilot Chat, select an agent session that supports workspace MCP tools, and make sure the Northbridge tools are enabled. Try the first prompt below.
+VS Code defines MCP servers under `"servers"` in `.vscode/mcp.json`.
 
-If you are adding Northbridge to another VS Code workspace, use the same server definition with an absolute checkout path in `args`.
+**Option A: Running from a GitHub clone**
+1. Open the cloned **Northbridge-browser** folder in VS Code. It includes [`.vscode/mcp.json`](.vscode/mcp.json).
+2. Start **northbridge-summarize** via the Command Palette (**MCP: Show Installed Servers**) or directly in `.vscode/mcp.json`:
+
+```json
+{
+  "servers": {
+    "northbridge-summarize": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/bin/northbridge-summarize-mcp.mjs"
+      ],
+      "env": {
+        "NORTHBRIDGE_APPROVED_DOMAINS": ""
+      }
+    }
+  }
+}
+```
+*(If adding Northbridge from another VS Code workspace, replace `${workspaceFolder}` with the absolute checkout path).*
+
+**Option B: Running from an installed npm package**
+If installed into a workspace (`node_modules/@sanidhya77/northbridge-browser`):
+
+```json
+{
+  "servers": {
+    "northbridge-summarize": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/node_modules/@sanidhya77/northbridge-browser/bin/northbridge-summarize-mcp.mjs"
+      ],
+      "env": {
+        "NORTHBRIDGE_APPROVED_DOMAINS": ""
+      }
+    }
+  }
+}
+```
 
 ### Codex CLI
 
@@ -54,14 +102,39 @@ codex mcp list
 
 ### Google Antigravity or Cursor
 
-Open the client's MCP configuration. In Antigravity, use the raw MCP configuration editor. In Cursor, the workspace file is `.cursor/mcp.json`. Merge the server entry into the existing `mcpServers` object and replace the example path with your checkout path. Restart or reload the server and check that the three research tools are available.
+Open the client's MCP configuration (`mcpServers` object). In Antigravity, use the raw MCP configuration editor. In Cursor, the workspace file is `.cursor/mcp.json`.
 
+On Windows, invoking `"command": "node"` with the script path in `"args"` is the verified launch pattern that avoids `.cmd` batch wrapper spawning restrictions (`EINVAL`/`ENOENT`):
+
+**Option A: Running from a GitHub clone**
 ```json
 {
   "mcpServers": {
     "northbridge-summarize": {
       "command": "node",
-      "args": ["C:/path/to/Northbridge-browser/bin/northbridge-summarize-mcp.mjs"]
+      "args": [
+        "C:/path/to/Northbridge-browser/bin/northbridge-summarize-mcp.mjs"
+      ],
+      "env": {
+        "NORTHBRIDGE_APPROVED_DOMAINS": ""
+      }
+    }
+  }
+}
+```
+
+**Option B: Running from an installed npm package**
+```json
+{
+  "mcpServers": {
+    "northbridge-summarize": {
+      "command": "node",
+      "args": [
+        "C:/path/to/node_modules/@sanidhya77/northbridge-browser/bin/northbridge-summarize-mcp.mjs"
+      ],
+      "env": {
+        "NORTHBRIDGE_APPROVED_DOMAINS": ""
+      }
     }
   }
 }
@@ -125,12 +198,14 @@ For the standalone Scopus fixture, run `node bin/northbridge-scopus.mjs --block 
 
 ## Verify locally
 
+Verification is performed via MCP stdio testing and unit test suites:
+
 ```powershell
-node --test test-web-search.mjs test-public-page.mjs
+npm.cmd test
 npm.cmd run test:summary
 npm.cmd run test:scopus
 ```
 
 ## Distribution status
 
-Install from this GitHub branch today. The package is currently private in npm metadata, and a standalone VS Code extension is not part of this pilot. VS Code can connect to the local MCP server through the workspace config above. See the official [VS Code MCP guide](https://code.visualstudio.com/docs/agent-customization/mcp-servers).
+Northbridge Browser is published as `@sanidhya77/northbridge-browser` on npm, requiring Node.js >= 24.0.0. Clients connect via standard stdio JSON-RPC using the verified configurations above. Verification is conducted via MCP stdio testing. See the official [VS Code MCP guide](https://code.visualstudio.com/docs/agent-customization/mcp-servers).
