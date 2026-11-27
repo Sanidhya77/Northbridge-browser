@@ -2,32 +2,27 @@
 
 Northbridge is a local Windows Model Context Protocol (MCP) server for web research (`Node.js >= 24.0.0`). It helps AI agents discover public pages, extract readable text and Word attachments, and assist inside a visible, user-controlled Chrome research profile using accessibility snapshots rather than screenshots by default.
 
-## Published on npm vs. GitHub Source
+## What is in 1.1.0
 
-| Availability | What is included |
-| --- | --- |
-| **npm [`@sanidhya77/northbridge-browser@1.0.0`](https://www.npmjs.com/package/@sanidhya77/northbridge-browser)** | Read-only MCP tools (`northbridge-summarize-mcp`): `northbridge_read_public_page`, `northbridge_search_web` (Brave API key optional), and `northbridge_summarize_page`. |
-| **GitHub branch [`feat/chrome-control`](https://github.com/Sanidhya77/Northbridge-browser/tree/feat/chrome-control) *(today)*** | Everything in `1.0.0`, **plus** opt-in dedicated Chrome control (`northbridge-control-mcp` / `northbridge-control`), the MV3 vs. CDP trade-off analysis, and Windows research-bridge startup/exit fixes (`bin/northbridge-research.js`, `page-summary.mjs`). |
-
-> **Where to get Chrome control today:** Opt-in Chrome control is not yet published in `@sanidhya77/northbridge-browser@1.0.0`. Clone the [`feat/chrome-control`](https://github.com/Sanidhya77/Northbridge-browser/tree/feat/chrome-control) branch from GitHub using Option A below.
-
----
+- **Public research** — read known HTTPS URLs and extract DOCX attachments with `northbridge-summarize-mcp`. Web search through Brave requires a Brave Search API key.
+- **Opt-in Chrome control** — use `northbridge-control-mcp` or the `northbridge-control` launcher to work in a dedicated research profile with tab approval, pause and revoke controls.
+- **Windows MCP fixes** — report child-process startup and exit errors promptly and check domain approval before launching the browser engine.
 
 ## Quickest Setup
 
-### Option A: From GitHub (includes opt-in Chrome control today)
+### Option A — From GitHub
 
 ```powershell
-git clone --branch feat/chrome-control https://github.com/Sanidhya77/Northbridge-browser.git
+git clone https://github.com/Sanidhya77/Northbridge-browser.git
 Set-Location Northbridge-browser
 npm.cmd ci
 .\node_modules\.bin\agent-browser.cmd install
 ```
 
-### Option B: From npm (`1.0.0`, read-only tools only)
+### Option B — From npm
 
 ```powershell
-npm.cmd install @sanidhya77/northbridge-browser
+npm.cmd install @sanidhya77/northbridge-browser@1.1.0
 ```
 
 Add the stdio server(s) to your MCP client using `"command": "node"` (example for VS Code `.vscode/mcp.json` from a clone):
@@ -87,7 +82,8 @@ No Brave key or Chrome window is needed to read known public URLs:
 - [Client Setup (VS Code, Codex, Antigravity, Cursor, Brave)](docs/client-setup.md)
 - [Workflows, Demos & Troubleshooting](docs/workflows-and-troubleshooting.md)
 - [Windows Permissions & Trade-Offs: MV3 Extension vs. CDP Adapter](docs/chrome-extension-vs-cdp-tradeoffs.md)
-- Pilot reports: [HANDOFF.md](HANDOFF.md) · [BENCHMARK.md](BENCHMARK.md) · [LICENSE](LICENSE)
+- [Pilot handoff](https://github.com/Sanidhya77/Northbridge-browser/blob/main/HANDOFF.md) and [benchmark notes](https://github.com/Sanidhya77/Northbridge-browser/blob/main/BENCHMARK.md)
+- [MIT license](LICENSE)
 
 Verify locally via PowerShell:
 

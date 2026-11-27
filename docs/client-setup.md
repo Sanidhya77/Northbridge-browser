@@ -4,7 +4,7 @@ Northbridge Browser runs local MCP servers over stdio JSON-RPC on Windows (`Node
 
 ## Available MCP Servers & Distribution Status
 
-| Server | Entry point | In npm `@sanidhya77/northbridge-browser@1.0.0`? | In GitHub `feat/chrome-control`? |
+| Server | Entry point | In npm `@sanidhya77/northbridge-browser@1.1.0`? | In GitHub source? |
 | --- | --- | --- | --- |
 | `northbridge-summarize` | `bin/northbridge-summarize-mcp.mjs` | Yes | Yes (plus Windows MCP startup/cleanup fixes) |
 | `northbridge-control` | `bin/northbridge-control-mcp.mjs` | No (next release) | **Yes — use GitHub source today** |
@@ -25,7 +25,7 @@ Direct HTTPS page reads (`northbridge_read_public_page` without `rendered_fallba
 
 Add servers under `"servers"` in `.vscode/mcp.json`:
 
-**Option A: GitHub clone (includes `northbridge-control` today)**
+**Option A: GitHub clone**
 
 ```json
 {
@@ -53,7 +53,7 @@ Add servers under `"servers"` in `.vscode/mcp.json`:
 
 If referencing Northbridge from a different VS Code workspace, replace `${workspaceFolder}` with the absolute path to your `Northbridge-browser` checkout.
 
-**Option B: Published npm package (`1.0.0`, read-only tools only)**
+**Option B: npm install (version 1.1.0 or newer)**
 
 ```json
 {
@@ -67,6 +67,13 @@ If referencing Northbridge from a different VS Code workspace, replace `${worksp
       "env": {
         "NORTHBRIDGE_APPROVED_DOMAINS": ""
       }
+    },
+    "northbridge-control": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/node_modules/@sanidhya77/northbridge-browser/bin/northbridge-control-mcp.mjs"
+      ]
     }
   }
 }
@@ -78,7 +85,7 @@ Start and manage configured servers in VS Code via Command Palette -> **MCP: Sho
 
 ## Codex CLI
 
-Run from your checkout directory (or npm project directory for `northbridge-summarize`), then restart the active Codex session so it reloads tools:
+Run from your GitHub checkout directory, then restart the active Codex session so it reloads tools:
 
 ```powershell
 $sum = Join-Path (Get-Location).Path 'bin/northbridge-summarize-mcp.mjs'
@@ -88,11 +95,13 @@ codex mcp add northbridge-control -- node $ctrl
 codex mcp list
 ```
 
-For npm `1.0.0` read-only tools only:
+For an npm install, run these commands from the folder where you installed the package.
 
 ```powershell
 $pkg = Join-Path (Get-Location).Path 'node_modules/@sanidhya77/northbridge-browser/bin/northbridge-summarize-mcp.mjs'
 codex mcp add northbridge-summarize -- node $pkg
+$ctrl = Join-Path (Get-Location).Path 'node_modules/@sanidhya77/northbridge-browser/bin/northbridge-control-mcp.mjs'
+codex mcp add northbridge-control -- node $ctrl
 ```
 
 ---
@@ -101,7 +110,7 @@ codex mcp add northbridge-summarize -- node $pkg
 
 Open the client's MCP configuration (`mcpServers` object; `.cursor/mcp.json` in Cursor or the raw MCP configuration editor in Antigravity). Use forward slashes or escaped backslashes:
 
-**Option A: GitHub clone (includes `northbridge-control` today)**
+**Option A: GitHub clone**
 
 ```json
 {
@@ -125,7 +134,7 @@ Open the client's MCP configuration (`mcpServers` object; `.cursor/mcp.json` in 
 }
 ```
 
-**Option B: Published npm package (`1.0.0`, read-only tools only)**
+**Option B: npm install (version 1.1.0 or newer)**
 
 ```json
 {
@@ -138,6 +147,12 @@ Open the client's MCP configuration (`mcpServers` object; `.cursor/mcp.json` in 
       "env": {
         "NORTHBRIDGE_APPROVED_DOMAINS": ""
       }
+    },
+    "northbridge-control": {
+      "command": "node",
+      "args": [
+        "C:/path/to/node_modules/@sanidhya77/northbridge-browser/bin/northbridge-control-mcp.mjs"
+      ]
     }
   }
 }
