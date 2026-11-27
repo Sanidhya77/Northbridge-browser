@@ -11,11 +11,16 @@
     "node": ">=24.0.0"
   },
   "bin": {
-    "northbridge-summarize-mcp": "bin/northbridge-summarize-mcp.mjs"
+    "northbridge-summarize-mcp": "bin/northbridge-summarize-mcp.mjs",
+    "northbridge-control-mcp": "bin/northbridge-control-mcp.mjs",
+    "northbridge-control": "bin/northbridge-control.mjs"
   },
   "files": [
     "bin/northbridge-summarize-mcp.mjs",
+    "bin/northbridge-control-mcp.mjs",
+    "bin/northbridge-control.mjs",
     "bin/northbridge-research.js",
+    "chrome-control.mjs",
     "page-summary.mjs",
     "public-page.mjs",
     "web-search.mjs",
@@ -32,6 +37,7 @@
     "test:research": "node test-research-policy.mjs",
     "test:scopus": "node test-scopus-acceptance.mjs",
     "test:summary": "node test-page-summary.mjs",
+    "test:control": "node test-chrome-control.mjs",
     "test:search": "node --test test-web-search.mjs",
     "test:public-page": "node --test test-public-page.mjs"
   },

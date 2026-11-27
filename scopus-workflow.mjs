@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-function findAgentBrowserBinary() {
+export function findAgentBrowserBinary() {
   const binaryWin = path.resolve(__dirname, 'node_modules', 'agent-browser', 'bin', 'agent-browser-win32-x64.exe');
   if (fs.existsSync(binaryWin)) return binaryWin;
   const parentBinary = path.resolve(__dirname, '..', '..', 'node_modules', 'agent-browser', 'bin', 'agent-browser-win32-x64.exe');

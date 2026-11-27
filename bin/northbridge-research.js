@@ -33,16 +33,26 @@ const crypto = require('node:crypto');
 const instanceSecret = crypto.randomBytes(8).toString('hex');
 const sessionPrefix = `nbr_${instanceSecret}_`;
 
-function findAgentBrowser() {
-  const localPkg = path.resolve(__dirname, '..', 'node_modules', 'agent-browser', 'bin', 'agent-browser.js');
-  if (fs.existsSync(localPkg)) {
-    return localPkg;
+function findAgentBrowserTarget() {
+  if (process.platform === 'win32') {
+    const localExe = path.resolve(__dirname, '..', 'node_modules', 'agent-browser', 'bin', 'agent-browser-win32-x64.exe');
+    if (fs.existsSync(localExe)) {
+      return { command: localExe, prefixArgs: [], windowsHide: true };
+    }
+    const parentExe = path.resolve(__dirname, '..', '..', 'node_modules', 'agent-browser', 'bin', 'agent-browser-win32-x64.exe');
+    if (fs.existsSync(parentExe)) {
+      return { command: parentExe, prefixArgs: [], windowsHide: true };
+    }
   }
-  const parentPkg = path.resolve(__dirname, '..', '..', 'agent-browser', 'bin', 'agent-browser.js');
-  if (fs.existsSync(parentPkg)) {
-    return parentPkg;
+  const localJs = path.resolve(__dirname, '..', 'node_modules', 'agent-browser', 'bin', 'agent-browser.js');
+  if (fs.existsSync(localJs)) {
+    return { command: process.execPath, prefixArgs: [localJs], windowsHide: true };
   }
-  return 'agent-browser';
+  const parentJs = path.resolve(__dirname, '..', '..', 'agent-browser', 'bin', 'agent-browser.js');
+  if (fs.existsSync(parentJs)) {
+    return { command: process.execPath, prefixArgs: [parentJs], windowsHide: true };
+  }
+  return { command: 'agent-browser', prefixArgs: [], windowsHide: true, shell: process.platform === 'win32' };
 }
 
 function isPrivateIp(rawIp) {
@@ -257,66 +267,125 @@ const ALLOWED_TOOLS = new Set([
 ]);
 
 class McpChildBridge {
-  constructor(agentBrowserPath) {
-    this.agentBrowserPath = agentBrowserPath;
+  constructor(target) {
+    this.target = target;
     this.proc = null;
     this.msgId = 0;
     this.pending = new Map();
     this.buffer = '';
+    this.startPromise = null;
+    this.closed = false;
   }
 
-  start() {
-    const cleanEnv = { ...process.env };
-    // Clear parent environment allowed domains so we pass session-specific allowedDomains array
-    delete cleanEnv.AGENT_BROWSER_ALLOWED_DOMAINS;
+  async ensureStarted(initParams = null) {
+    if (this.proc && !this.proc.killed && this.proc.exitCode === null) {
+      if (this.startPromise) await this.startPromise;
+      return;
+    }
+    if (this.startPromise) return this.startPromise;
 
-    this.proc = spawn(process.execPath, [this.agentBrowserPath, 'mcp', '--tools', 'core'], {
-      stdio: ['pipe', 'pipe', 'inherit'],
-      env: cleanEnv
-    });
+    this.startPromise = (async () => {
+      const cleanEnv = { ...process.env };
+      // Clear parent environment allowed domains so we pass session-specific allowedDomains array
+      delete cleanEnv.AGENT_BROWSER_ALLOWED_DOMAINS;
 
-    this.proc.on('exit', (code, signal) => {
-      for (const [id, { reject }] of this.pending) {
-        reject(new Error(`Upstream agent-browser exited (code: ${code}, signal: ${signal})`));
-      }
-      this.pending.clear();
-      process.exit(code ?? 0);
-    });
+      this.proc = spawn(this.target.command, [...this.target.prefixArgs, 'mcp', '--tools', 'core'], {
+        stdio: ['pipe', 'pipe', 'inherit'],
+        env: cleanEnv,
+        windowsHide: this.target.windowsHide !== false,
+        shell: Boolean(this.target.shell)
+      });
 
-    this.proc.stdout.on('data', chunk => {
-      this.buffer += chunk.toString();
-      const lines = this.buffer.split('\n');
-      this.buffer = lines.pop();
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const msg = JSON.parse(line);
-          if (msg.id !== undefined && this.pending.has(msg.id)) {
-            const { resolve } = this.pending.get(msg.id);
-            this.pending.delete(msg.id);
-            resolve(msg);
-          }
-        } catch (e) {
-          console.error('[northbridge-research] Parse error from upstream:', e.message);
+      this.proc.on('error', (err) => {
+        for (const { reject } of this.pending.values()) {
+          reject(new Error(`Upstream agent-browser spawn error: ${err.message}`));
         }
+        this.pending.clear();
+      });
+
+      this.proc.on('exit', (code, signal) => {
+        for (const { reject } of this.pending.values()) {
+          reject(new Error(`Upstream agent-browser exited (code: ${code}, signal: ${signal})`));
+        }
+        this.pending.clear();
+        this.proc = null;
+        this.startPromise = null;
+      });
+
+      this.proc.stdout.on('data', chunk => {
+        this.buffer += chunk.toString();
+        const lines = this.buffer.split('\n');
+        this.buffer = lines.pop();
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const msg = JSON.parse(line);
+            if (msg.id !== undefined && this.pending.has(msg.id)) {
+              const { resolve } = this.pending.get(msg.id);
+              this.pending.delete(msg.id);
+              resolve(msg);
+            }
+          } catch (e) {
+            console.error('[northbridge-research] Parse error from upstream:', e.message);
+          }
+        }
+      });
+
+      await this._sendRaw({
+        jsonrpc: '2.0',
+        method: 'initialize',
+        params: initParams || {
+          protocolVersion: '2024-11-05',
+          clientInfo: { name: 'northbridge-browser-research', version: '1.0.0' },
+          capabilities: {}
+        }
+      });
+      if (this.proc?.stdin?.writable) {
+        this.proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} }) + '\n');
       }
-    });
+    })();
+
+    try {
+      await this.startPromise;
+    } catch (err) {
+      this.startPromise = null;
+      throw err;
+    }
   }
 
-  send(msg) {
+  _sendRaw(msg) {
     return new Promise((resolve, reject) => {
-      const id = msg.id ?? ++this.msgId;
+      if (!this.proc || !this.proc.stdin?.writable || this.proc.exitCode !== null) {
+        reject(new Error('Upstream agent-browser process is not running.'));
+        return;
+      }
+      const id = ++this.msgId;
       const outgoing = { ...msg, id };
       this.pending.set(id, { resolve, reject });
       this.proc.stdin.write(JSON.stringify(outgoing) + '\n');
     });
   }
+
+  async send(msg, initParams = null) {
+    await this.ensureStarted(initParams);
+    const callerId = msg.id;
+    const resp = await this._sendRaw(msg);
+    return callerId !== undefined ? { ...resp, id: callerId } : resp;
+  }
+
+  close() {
+    this.closed = true;
+    if (this.proc) {
+      try { this.proc.kill(); } catch {}
+      this.proc = null;
+    }
+  }
 }
 
 async function handleMcpServer() {
-  const agentBrowserPath = findAgentBrowser();
-  const bridge = new McpChildBridge(agentBrowserPath);
-  bridge.start();
+  const agentBrowserTarget = findAgentBrowserTarget();
+  const bridge = new McpChildBridge(agentBrowserTarget);
+  let savedInitParams = null;
 
   const rl = readline.createInterface({
     input: process.stdin,
@@ -325,20 +394,14 @@ async function handleMcpServer() {
   });
 
   const cleanup = () => {
-    if (bridge.proc) {
-      try { bridge.proc.kill(); } catch (e) {}
-    }
+    bridge.close();
     process.exit(0);
   };
 
   rl.on('close', cleanup);
   process.on('SIGINT', cleanup);
   process.on('SIGTERM', cleanup);
-  process.on('exit', () => {
-    if (bridge.proc) {
-      try { bridge.proc.kill(); } catch (e) {}
-    }
-  });
+  process.on('exit', () => bridge.close());
 
   rl.on('line', async line => {
     if (!line.trim()) return;
@@ -354,148 +417,169 @@ async function handleMcpServer() {
 
     // Handle notifications (no id)
     if (id === undefined) {
-      if (bridge.proc && bridge.proc.stdin.writable) {
+      if (method !== 'notifications/initialized' && bridge.proc && bridge.proc.stdin.writable) {
         bridge.proc.stdin.write(JSON.stringify(req) + '\n');
       }
       return;
     }
 
     if (method === 'initialize') {
-      const upstreamResp = await bridge.send(req);
-      if (upstreamResp.result && upstreamResp.result.serverInfo) {
-        upstreamResp.result.serverInfo.name = 'northbridge-browser-research';
-      }
-      process.stdout.write(JSON.stringify(upstreamResp) + '\n');
-      return;
-    }
-
-    if (method === 'tools/list') {
-      const upstreamResp = await bridge.send(req);
-      if (upstreamResp.result && Array.isArray(upstreamResp.result.tools)) {
-        // Expose only safe read-only research tools
-        upstreamResp.result.tools = upstreamResp.result.tools.filter(t => ALLOWED_TOOLS.has(t.name));
-      }
-      process.stdout.write(JSON.stringify(upstreamResp) + '\n');
-      return;
-    }
-
-    if (method === 'tools/call') {
-      const toolName = params?.name;
-      const args = { ...(params?.arguments || {}) };
-      const callerSession = args.session || 'default';
-
-      // Check tool permission
-      if (!ALLOWED_TOOLS.has(toolName)) {
-        process.stdout.write(JSON.stringify({
-          jsonrpc: '2.0',
-          id,
-          result: {
-            isError: true,
-            content: [{
-              type: 'text',
-              text: `Tool "${toolName}" is disabled in Northbridge Research mode (read-only safe profile). Form input and scripting actions are disallowed.`
-            }]
-          }
-        }) + '\n');
-        return;
-      }
-
-      // Handle session opening
-      if (toolName === 'agent_browser_open') {
-        const targetUrl = args.url;
-        const validation = await validateUrlSecurity(targetUrl);
-        if (!validation.ok) {
-          process.stdout.write(JSON.stringify({
-            jsonrpc: '2.0',
-            id,
-            result: {
-              isError: true,
-              content: [{ type: 'text', text: validation.error }]
-            }
-          }) + '\n');
-          return;
+      savedInitParams = params || null;
+      process.stdout.write(JSON.stringify({
+        jsonrpc: '2.0',
+        id,
+        result: {
+          protocolVersion: params?.protocolVersion || '2024-11-05',
+          capabilities: { tools: {} },
+          serverInfo: { name: 'northbridge-browser-research', version: '1.0.0' }
         }
+      }) + '\n');
+      return;
+    }
 
-        // Register session ownership and map to isolated internal name
-        ownedSessions.add(callerSession);
-        args.session = toInternalSession(callerSession);
+    if (method === 'ping') {
+      process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result: {} }) + '\n');
+      return;
+    }
 
-        // Pass exact approved domains to engine's domain filter (Fetch.enable interceptor)
-        args.allowedDomains = Array.from(userApprovedDomains);
-
-        const upstreamReq = {
-          ...req,
-          params: {
-            ...params,
-            arguments: args
-          }
-        };
-
-        const upstreamResp = await bridge.send(upstreamReq);
+    try {
+      if (method === 'tools/list') {
+        const upstreamResp = await bridge.send(req, savedInitParams);
+        if (upstreamResp.result && Array.isArray(upstreamResp.result.tools)) {
+          // Expose only safe read-only research tools
+          upstreamResp.result.tools = upstreamResp.result.tools.filter(t => ALLOWED_TOOLS.has(t.name));
+        }
         process.stdout.write(JSON.stringify(upstreamResp) + '\n');
         return;
       }
 
-      // For all other tools: enforce session ownership!
-      if (!ownedSessions.has(callerSession)) {
-        process.stdout.write(JSON.stringify({
-          jsonrpc: '2.0',
-          id,
-          result: {
-            isError: true,
-            content: [{
-              type: 'text',
-              text: `[SESSION ISOLATION VIOLATION] Session "${callerSession}" was not created by this Northbridge Research instance. Access is denied.`
-            }]
-          }
-        }) + '\n');
-        return;
-      }
+      if (method === 'tools/call') {
+        const toolName = params?.name;
+        const args = { ...(params?.arguments || {}) };
+        const callerSession = args.session || 'default';
 
-      // Map session to internal namespaced session
-      args.session = toInternalSession(callerSession);
-
-      // Handle direct fetch via agent_browser_read
-      if (toolName === 'agent_browser_read' && args.url) {
-        const readValidation = await validateUrlSecurity(args.url);
-        if (!readValidation.ok) {
+        // Check tool permission before starting any child browser process
+        if (!ALLOWED_TOOLS.has(toolName)) {
           process.stdout.write(JSON.stringify({
             jsonrpc: '2.0',
             id,
             result: {
               isError: true,
-              content: [{ type: 'text', text: readValidation.error }]
+              content: [{
+                type: 'text',
+                text: `Tool "${toolName}" is disabled in Northbridge Research mode (read-only safe profile). Form input and scripting actions are disallowed.`
+              }]
             }
           }) + '\n');
           return;
         }
-      }
 
-      // Handle session closing
-      if (toolName === 'agent_browser_close') {
+        // Handle session opening (validate URL & approval before touching upstream browser)
+        if (toolName === 'agent_browser_open') {
+          const targetUrl = args.url;
+          const validation = await validateUrlSecurity(targetUrl);
+          if (!validation.ok) {
+            process.stdout.write(JSON.stringify({
+              jsonrpc: '2.0',
+              id,
+              result: {
+                isError: true,
+                content: [{ type: 'text', text: validation.error }]
+              }
+            }) + '\n');
+            return;
+          }
+
+          // Register session ownership and map to isolated internal name
+          ownedSessions.add(callerSession);
+          args.session = toInternalSession(callerSession);
+
+          // Pass exact approved domains to engine's domain filter (Fetch.enable interceptor)
+          args.allowedDomains = Array.from(userApprovedDomains);
+
+          const upstreamReq = {
+            ...req,
+            params: {
+              ...params,
+              arguments: args
+            }
+          };
+
+          const upstreamResp = await bridge.send(upstreamReq, savedInitParams);
+          process.stdout.write(JSON.stringify(upstreamResp) + '\n');
+          return;
+        }
+
+        // For all other tools: enforce session ownership!
+        if (!ownedSessions.has(callerSession)) {
+          process.stdout.write(JSON.stringify({
+            jsonrpc: '2.0',
+            id,
+            result: {
+              isError: true,
+              content: [{
+                type: 'text',
+                text: `[SESSION ISOLATION VIOLATION] Session "${callerSession}" was not created by this Northbridge Research instance. Access is denied.`
+              }]
+            }
+          }) + '\n');
+          return;
+        }
+
+        // Map session to internal namespaced session
+        args.session = toInternalSession(callerSession);
+
+        // Handle direct fetch via agent_browser_read
+        if (toolName === 'agent_browser_read' && args.url) {
+          const readValidation = await validateUrlSecurity(args.url);
+          if (!readValidation.ok) {
+            process.stdout.write(JSON.stringify({
+              jsonrpc: '2.0',
+              id,
+              result: {
+                isError: true,
+                content: [{ type: 'text', text: readValidation.error }]
+              }
+            }) + '\n');
+            return;
+          }
+        }
+
+        // Handle session closing
+        if (toolName === 'agent_browser_close') {
+          const upstreamReq = {
+            ...req,
+            params: { ...params, arguments: args }
+          };
+          const upstreamResp = await bridge.send(upstreamReq, savedInitParams);
+          ownedSessions.delete(callerSession);
+          process.stdout.write(JSON.stringify(upstreamResp) + '\n');
+          return;
+        }
+
+        // Forward other allowed tools
         const upstreamReq = {
           ...req,
           params: { ...params, arguments: args }
         };
-        const upstreamResp = await bridge.send(upstreamReq);
-        ownedSessions.delete(callerSession);
+        const upstreamResp = await bridge.send(upstreamReq, savedInitParams);
         process.stdout.write(JSON.stringify(upstreamResp) + '\n');
         return;
       }
 
-      // Forward other allowed tools
-      const upstreamReq = {
-        ...req,
-        params: { ...params, arguments: args }
-      };
-      const upstreamResp = await bridge.send(upstreamReq);
+      // Forward any other JSON-RPC method
+      const upstreamResp = await bridge.send(req, savedInitParams);
       process.stdout.write(JSON.stringify(upstreamResp) + '\n');
-      return;
+    } catch (err) {
+      process.stdout.write(JSON.stringify({
+        jsonrpc: '2.0',
+        id,
+        result: {
+          isError: true,
+          content: [{ type: 'text', text: `[northbridge-research] ${err.message}` }]
+        }
+      }) + '\n');
     }
-
-    // Forward any other JSON-RPC method
-    const upstreamResp = await bridge.send(req);
-    process.stdout.write(JSON.stringify(upstreamResp) + '\n');
   });
 }
 

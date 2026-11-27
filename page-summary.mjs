@@ -1267,17 +1267,42 @@ class StdioMcpBridgeClient {
     this.msgId = 0;
     this.pending = new Map();
     this.buffer = '';
+    this.closedByCaller = false;
+    this.exitError = null;
   }
 
   async init() {
+    this.closedByCaller = false;
+    this.exitError = null;
     this.proc = spawn(process.execPath, [this.scriptPath], {
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env, ...this.extraEnv }
+      env: { ...process.env, ...this.extraEnv },
+      windowsHide: true
     });
 
     this.stderrLines = [];
     this.proc.stderr.on('data', chunk => {
       this.stderrLines.push(chunk.toString());
+    });
+
+    const rejectAllPending = (err) => {
+      this.exitError = err;
+      for (const entry of this.pending.values()) {
+        clearTimeout(entry.timer);
+        entry.reject(err);
+      }
+      this.pending.clear();
+    };
+
+    this.proc.on('error', err => {
+      rejectAllPending(new Error(`MCP bridge spawn error (${this.scriptPath}): ${err.message}`));
+    });
+
+    this.proc.on('exit', (code, signal) => {
+      if (!this.closedByCaller) {
+        const stderrTail = (this.stderrLines || []).join('').trim().slice(-400);
+        rejectAllPending(new Error(`MCP bridge exited unexpectedly (code=${code}, signal=${signal})${stderrTail ? `: ${stderrTail}` : ''}`));
+      }
     });
 
     this.proc.stdout.on('data', chunk => {
@@ -1289,9 +1314,10 @@ class StdioMcpBridgeClient {
         try {
           const msg = JSON.parse(line);
           if (msg.id !== undefined && this.pending.has(msg.id)) {
-            const { resolve } = this.pending.get(msg.id);
+            const entry = this.pending.get(msg.id);
+            clearTimeout(entry.timer);
             this.pending.delete(msg.id);
-            resolve(msg.result);
+            entry.resolve(msg.result);
           }
         } catch {}
       }
@@ -1307,15 +1333,16 @@ class StdioMcpBridgeClient {
 
   send(method, params = {}, timeoutMs = 45000) {
     return new Promise((resolve, reject) => {
+      if (this.exitError) {
+        reject(this.exitError);
+        return;
+      }
       const id = ++this.msgId;
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`MCP call ${method} timed out after ${timeoutMs}ms`));
       }, timeoutMs);
-      this.pending.set(id, {
-        resolve: (val) => { clearTimeout(timer); resolve(val); },
-        reject: (err) => { clearTimeout(timer); reject(err); }
-      });
+      this.pending.set(id, { resolve, reject, timer });
       this.proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
     });
   }
@@ -1327,6 +1354,12 @@ class StdioMcpBridgeClient {
   }
 
   async close() {
+    this.closedByCaller = true;
+    for (const entry of this.pending.values()) {
+      clearTimeout(entry.timer);
+      entry.reject(new Error('MCP bridge closed by caller.'));
+    }
+    this.pending.clear();
     if (this.proc) {
       try { this.proc.stdin.end(); } catch {}
       try { this.proc.kill(); } catch {}
