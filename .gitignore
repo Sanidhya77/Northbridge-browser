@@ -8,3 +8,5 @@ test-downloads/
 *.tgz
 .env
 .env.*
+.agent-browser-runtime/
+pilot-exports/

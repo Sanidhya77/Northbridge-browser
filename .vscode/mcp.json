@@ -9,6 +9,23 @@
       "env": {
         "AGENT_BROWSER_ALLOWED_DOMAINS": "127.0.0.1"
       }
+    },
+    "northbridge-scopus": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/bin/northbridge-scopus-mcp.mjs"
+      ]
+    },
+    "northbridge-summarize": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/bin/northbridge-summarize-mcp.mjs"
+      ],
+      "env": {
+        "NORTHBRIDGE_APPROVED_DOMAINS": ""
+      }
     }
   }
 }

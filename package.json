@@ -1,20 +1,45 @@
 {
-  "name": "university-browser-demo",
+  "name": "@sanidhya77/northbridge-browser",
   "version": "1.0.0",
-  "private": true,
-  "bin": {
-    "northbridge-browser": "./bin/northbridge-browser.js",
-    "northbridge-research": "./bin/northbridge-research.js",
-    "northbridge-scopus": "./bin/northbridge-scopus.mjs"
+  "description": "Read-only web research, structured page summary, link discovery, and DOCX extraction MCP server for AI agents",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Sanidhya77/Northbridge-browser.git"
   },
+  "license": "MIT",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "bin": {
+    "northbridge-summarize-mcp": "bin/northbridge-summarize-mcp.mjs",
+    "northbridge-control-mcp": "bin/northbridge-control-mcp.mjs",
+    "northbridge-control": "bin/northbridge-control.mjs"
+  },
+  "files": [
+    "bin/northbridge-summarize-mcp.mjs",
+    "bin/northbridge-control-mcp.mjs",
+    "bin/northbridge-control.mjs",
+    "bin/northbridge-research.js",
+    "chrome-control.mjs",
+    "page-summary.mjs",
+    "public-page.mjs",
+    "web-search.mjs",
+    "scopus-workflow.mjs",
+    "README.md"
+  ],
   "scripts": {
     "start": "node server.mjs",
     "start:scopus": "node scopus-fixture.mjs",
+    "test": "node --test test-web-search.mjs test-public-page.mjs",
     "test:mcp": "node test-mcp-acceptance.mjs",
     "test:cli": "powershell -ExecutionPolicy Bypass -File test-cli-acceptance.ps1",
     "test:lookup": "node test-mcp-lookup.mjs",
     "test:research": "node test-research-policy.mjs",
-    "test:scopus": "node test-scopus-acceptance.mjs"
+    "test:scopus": "node test-scopus-acceptance.mjs",
+    "test:summary": "node test-page-summary.mjs",
+    "test:control": "node test-chrome-control.mjs",
+    "test:search": "node --test test-web-search.mjs",
+    "test:public-page": "node --test test-public-page.mjs"
   },
   "dependencies": {
     "agent-browser": "0.41.2"

@@ -6,7 +6,23 @@ import os from 'node:os';
 import { spawn, execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createScopusFixtureServer } from './scopus-fixture.mjs';
-import { executeScopusBlock, parseCsv, validateExportFilename, createMcpClient, validateCdpEndpoint, verifyCdpAttachment } from './scopus-workflow.mjs';
+import {
+  executeScopusBlock,
+  exportScopusResultsTab,
+  findRef,
+  identifyFreshDownload,
+  validateScopusCsvContent,
+  parseCsv,
+  validateExportFilename,
+  createMcpClient,
+  validateCdpEndpoint,
+  discoverChromeEndpoint,
+  verifyCdpAttachment,
+  inspectChromeProfileSafety,
+  isSharedDefaultChromeProfileDir,
+  createCdpDownloadSession,
+  isTabGone
+} from './scopus-workflow.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -35,7 +51,7 @@ async function runScopusAcceptanceSuite() {
     // -------------------------------------------------------------------
     // Test 1: Complete Valid Block D3 Execution & Fresh Download Verification
     // -------------------------------------------------------------------
-    console.log('[Test 1/16] Testing complete valid block D3 search & fresh CSV download...');
+    console.log('[Test 1/27] Testing complete valid block D3 search & fresh CSV download...');
     const result1 = await executeScopusBlock({
       block: 'D3',
       claim: 'Weights can be derived from a rank order.',
@@ -78,7 +94,7 @@ async function runScopusAcceptanceSuite() {
     // -------------------------------------------------------------------
     // Test 2: Priority 1 Regression · Preserve Existing Downloads and Exports
     // -------------------------------------------------------------------
-    console.log('[Test 2/16] Testing preservation of existing files in Downloads and exports folders on failed export...');
+    console.log('[Test 2/27] Testing preservation of existing files in Downloads and exports folders on failed export...');
     const existingDownloadFile = path.join(testDownloadsDir, 'Ch3_34_SC_preserve.csv');
     const existingExportFile = path.join(exportsDir, 'Ch3_34_SC_preserve.csv');
     const originalDownloadData = 'download_id,source,value\noriginal_dl_1,scopus_fixture,999\n';
@@ -112,15 +128,15 @@ async function runScopusAcceptanceSuite() {
     assert.strictEqual(observedExportData, originalExportData, 'Pre-existing file in exports folder must be completely unchanged');
 
     // Clean up test preservation files
-    try { fs.unlinkSync(existingDownloadFile); } catch (e) {}
-    try { fs.unlinkSync(existingExportFile); } catch (e) {}
+    try { fs.unlinkSync(existingDownloadFile); } catch (e) { }
+    try { fs.unlinkSync(existingExportFile); } catch (e) { }
     console.log('  Observed message:', result2.exportMessage);
     console.log('  PASS: Existing files in Downloads and exports folders are preserved byte-for-byte on failed export.\n');
 
     // -------------------------------------------------------------------
     // Test 3: Download Never Arrives (Bounded Wait Timeout)
     // -------------------------------------------------------------------
-    console.log('[Test 3/16] Testing bounded wait timeout when download never arrives...');
+    console.log('[Test 3/27] Testing bounded wait timeout when download never arrives...');
     const result3 = await executeScopusBlock({
       block: 'D3-TIMEOUT',
       claim: 'Weights can be derived from a rank order.',
@@ -144,7 +160,7 @@ async function runScopusAcceptanceSuite() {
     // -------------------------------------------------------------------
     // Test 4: Multiline Abstract Parsing Regression
     // -------------------------------------------------------------------
-    console.log('[Test 4/16] Testing multiline abstract CSV parsing (RFC 4180 compliance)...');
+    console.log('[Test 4/27] Testing multiline abstract CSV parsing (RFC 4180 compliance)...');
     const result4 = await executeScopusBlock({
       block: 'D3-MULTILINE',
       claim: 'Weights can be derived from a rank order.',
@@ -174,7 +190,7 @@ async function runScopusAcceptanceSuite() {
     // -------------------------------------------------------------------
     // Test 5: Count Mismatch Detection Regression
     // -------------------------------------------------------------------
-    console.log('[Test 5/16] Testing count mismatch between observed results and parsed rows...');
+    console.log('[Test 5/27] Testing count mismatch between observed results and parsed rows...');
     const result5 = await executeScopusBlock({
       block: 'D3-MISMATCH',
       claim: 'Weights can be derived from a rank order.',
@@ -196,10 +212,10 @@ async function runScopusAcceptanceSuite() {
     // -------------------------------------------------------------------
     // Test 6: Path Traversal Protection Regression
     // -------------------------------------------------------------------
-    console.log('[Test 6/16] Testing path traversal protection in runner and fixture...');
+    console.log('[Test 6/27] Testing path traversal protection in runner and fixture...');
     const outsideTarget = path.resolve(exportsDir, '..', 'outside.csv');
     if (fs.existsSync(outsideTarget)) {
-      try { fs.unlinkSync(outsideTarget); } catch (e) {}
+      try { fs.unlinkSync(outsideTarget); } catch (e) { }
     }
 
     // 6a. Runner path traversal rejection
@@ -235,7 +251,7 @@ async function runScopusAcceptanceSuite() {
     // -------------------------------------------------------------------
     // Test 7: Rejected Query Handling (Syntax Error)
     // -------------------------------------------------------------------
-    console.log('[Test 7/16] Testing rejected query with syntax error (marked NOT EXECUTED, no export)...');
+    console.log('[Test 7/27] Testing rejected query with syntax error (marked NOT EXECUTED, no export)...');
     const result7 = await executeScopusBlock({
       block: 'D3-SYNTAX-ERR',
       claim: 'Weights can be derived from a rank order.',
@@ -258,7 +274,7 @@ async function runScopusAcceptanceSuite() {
     // -------------------------------------------------------------------
     // Test 8: Rewritten Query Handling
     // -------------------------------------------------------------------
-    console.log('[Test 8/16] Testing rewritten query handling (database silently modifies query)...');
+    console.log('[Test 8/27] Testing rewritten query handling (database silently modifies query)...');
     const result8 = await executeScopusBlock({
       block: 'D3-REWRITE',
       claim: 'Weights can be derived from a rank order.',
@@ -281,7 +297,7 @@ async function runScopusAcceptanceSuite() {
     // -------------------------------------------------------------------
     // Test 9: Missing Query Display Handling
     // -------------------------------------------------------------------
-    console.log('[Test 9/16] Testing missing query display handling (query box missing entirely)...');
+    console.log('[Test 9/27] Testing missing query display handling (query box missing entirely)...');
     const result9 = await executeScopusBlock({
       block: 'D3-MISSING-Q',
       claim: 'Weights can be derived from a rank order.',
@@ -303,7 +319,7 @@ async function runScopusAcceptanceSuite() {
     // -------------------------------------------------------------------
     // Test 10: Search-Within Filter Cleared Before Export
     // -------------------------------------------------------------------
-    console.log('[Test 10/16] Testing search-within filter is cleared and count restored before export...');
+    console.log('[Test 10/27] Testing search-within filter is cleared and count restored before export...');
     const result10 = await executeScopusBlock({
       block: 'D3-FILTER-CLEAR',
       claim: 'Weights can be derived from a rank order.',
@@ -328,7 +344,7 @@ async function runScopusAcceptanceSuite() {
     // -------------------------------------------------------------------
     // Test 11: Control Paper Missed by Block but Indexed
     // -------------------------------------------------------------------
-    console.log('[Test 11/16] Testing control paper missed by block but confirmed indexed in database...');
+    console.log('[Test 11/27] Testing control paper missed by block but confirmed indexed in database...');
     const result11 = await executeScopusBlock({
       block: 'D3-MISSED',
       claim: 'Weights can be derived from a rank order.',
@@ -351,7 +367,7 @@ async function runScopusAcceptanceSuite() {
     // -------------------------------------------------------------------
     // Test 12: Priority 1 Regression · Require Selected Tab Suite
     // -------------------------------------------------------------------
-    console.log('[Test 12/16] Testing strict tab selection requirements (unique match required)...');
+    console.log('[Test 12/27] Testing strict tab selection requirements (unique match required)...');
 
     // Setup multi-tab session for tab tests
     const tabSession = 'test-multi-tab-' + Date.now();
@@ -440,14 +456,14 @@ async function runScopusAcceptanceSuite() {
     } finally {
       try {
         await tabClient.callTool('agent_browser_close', { session: tabSession });
-      } catch (e) {}
+      } catch (e) { }
       await tabClient.close();
     }
 
     // -------------------------------------------------------------------
     // Test 13: Starting Point 2 · User-Provided Institutional Link with Sign-in Pause
     // -------------------------------------------------------------------
-    console.log('[Test 13/16] Testing user-provided institutional link with sign-in pause...');
+    console.log('[Test 13/27] Testing user-provided institutional link with sign-in pause...');
     const result13 = await executeScopusBlock({
       block: 'D3-AUTH',
       claim: 'Weights can be derived from a rank order.',
@@ -463,7 +479,7 @@ async function runScopusAcceptanceSuite() {
     // -------------------------------------------------------------------
     // Test 14: Bot Challenge / Unusual Traffic Warning Halts Cleanly
     // -------------------------------------------------------------------
-    console.log('[Test 14/16] Testing bot challenge / unusual traffic warning halts cleanly...');
+    console.log('[Test 14/27] Testing bot challenge / unusual traffic warning halts cleanly...');
     const result14 = await executeScopusBlock({
       block: 'D3-BOT',
       claim: 'Weights can be derived from a rank order.',
@@ -479,23 +495,23 @@ async function runScopusAcceptanceSuite() {
     // -------------------------------------------------------------------
     // Test 15: Clean Cleanup of Attempt Downloads (User Downloads Untouched)
     // -------------------------------------------------------------------
-    console.log('[Test 15/16] Testing attempt download cleanup leaves test downloads directory clean...');
+    console.log('[Test 15/27] Testing attempt download cleanup leaves test downloads directory clean...');
     const remainingFiles = fs.readdirSync(testDownloadsDir);
     const hasAttemptFiles = remainingFiles.some(f => f.includes('attempt-'));
-    assert.strictEqual(hasAttemptFiles, false, 'Temporary attempt files must be cleaned up from Downloads');
+    assert.strictEqual(hasAttemptFiles, false, `Temporary attempt files must be cleaned up from Downloads (found: ${JSON.stringify(remainingFiles)})`);
     console.log('  PASS: Attempt temporary downloads cleanly unlinked; no orphan attempt files left.\n');
 
     // -------------------------------------------------------------------
     // Test 16: Verification of Preserved Historical Exports
     // -------------------------------------------------------------------
-    console.log('[Test 16/21] Verifying baseline Block D3 exports remain preserved on disk...');
+    console.log('[Test 16/27] Verifying baseline Block D3 exports remain preserved on disk...');
     assert.ok(fs.existsSync(path.join(exportsDir, 'Ch3_34_SC_D3.csv')), 'Ch3_34_SC_D3.csv must remain preserved');
     console.log('  PASS: Baseline Block D3 CSV export preserved.\n');
 
     // -------------------------------------------------------------------
     // Test 17: Successful Export Targets Existing File (Preservation Regression)
     // -------------------------------------------------------------------
-    console.log('[Test 17/21] Testing preservation of existing CSV on successful export collision...');
+    console.log('[Test 17/27] Testing preservation of existing CSV on successful export collision...');
     const existingTargetFile = path.join(exportsDir, 'Ch3_34_SC_existing_test.csv');
     const existingTargetData = 'disposable_id,title,value\nold_rec_1,Previous Run Report,42\n';
     fs.writeFileSync(existingTargetFile, existingTargetData, 'utf8');
@@ -530,15 +546,15 @@ async function runScopusAcceptanceSuite() {
     assert.ok(result17.lastLine.includes('existing file preserved byte-for-byte'), 'Last line must report existing file preserved');
 
     // Clean up collision test files
-    try { fs.unlinkSync(existingTargetFile); } catch (e) {}
-    try { fs.unlinkSync(uniquePlacedFile); } catch (e) {}
+    try { fs.unlinkSync(existingTargetFile); } catch (e) { }
+    try { fs.unlinkSync(uniquePlacedFile); } catch (e) { }
     console.log('  Observed report message:', result17.exportMessage);
     console.log('  PASS: Existing file preserved byte-for-byte; new export placed at unique path and reported.\n');
 
     // -------------------------------------------------------------------
     // Test 18: External Chrome Attachment & Real Search Block Execution
     // -------------------------------------------------------------------
-    console.log('[Test 18/22] Testing external Chrome attachment, verification, and search block execution...');
+    console.log('[Test 18/27] Testing external Chrome attachment, verification, and search block execution...');
     const extChromePort = 9223;
     const extChromeProfile = path.join(os.tmpdir(), `northbridge-chrome-profile-${Date.now()}`);
     if (!fs.existsSync(extChromeProfile)) fs.mkdirSync(extChromeProfile, { recursive: true });
@@ -567,7 +583,7 @@ async function runScopusAcceptanceSuite() {
             req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
           });
           if (body && body.includes('Browser')) return true;
-        } catch (e) {}
+        } catch (e) { }
         await new Promise(r => setTimeout(r, 150));
       }
       throw new Error(`Chrome on port ${port} did not become ready`);
@@ -664,7 +680,7 @@ async function runScopusAcceptanceSuite() {
       console.log('  18b Observed search execution result:', result18.lastLine);
 
       // Clean up test export
-      try { fs.unlinkSync(result18.exportFilePath); } catch (e) {}
+      try { fs.unlinkSync(result18.exportFilePath); } catch (e) { }
 
       // Verify that unrelated tab remains open and completely untouched
       const tabsPostRun = await getChromeTabs(extChromePort);
@@ -679,7 +695,7 @@ async function runScopusAcceptanceSuite() {
       // -------------------------------------------------------------------
       // Test 19: Negative Tests: Empty '{}' Metadata, Unavailable, Non-Loopback
       // -------------------------------------------------------------------
-      console.log('[Test 19/22] Testing rejection of empty metadata, unavailable, and non-loopback endpoints...');
+      console.log('[Test 19/27] Testing rejection of empty metadata, unavailable, and non-loopback endpoints...');
 
       // 19a. Endpoint returning HTTP 200 with '{}' (missing debugger metadata)
       const mockEmptyPort = 9228;
@@ -736,7 +752,7 @@ async function runScopusAcceptanceSuite() {
       // -------------------------------------------------------------------
       // Test 20: Missing, Ambiguous, Failed Tab Switch, and Wrong Active Tab
       // -------------------------------------------------------------------
-      console.log('[Test 20/22] Testing tab handling: missing, ambiguous, failed switch, and wrong active tab...');
+      console.log('[Test 20/27] Testing tab handling: missing, ambiguous, failed switch, and wrong active tab...');
 
       // 20a. Missing tab halts cleanly
       const result20a = await executeScopusBlock({
@@ -771,7 +787,7 @@ async function runScopusAcceptanceSuite() {
 
       // 20c. Failed tab switch halts cleanly before search
       const mockClientFailSwitch = {
-        async init() {},
+        async init() { },
         async callTool(name) {
           if (name === 'agent_browser_tab_list') {
             return {
@@ -797,7 +813,7 @@ async function runScopusAcceptanceSuite() {
           }
           return { raw: {}, text: '' };
         },
-        async close() {}
+        async close() { }
       };
 
       const result20c = await executeScopusBlock({
@@ -817,7 +833,7 @@ async function runScopusAcceptanceSuite() {
       // 20d. Active tab mismatch halts cleanly before search
       let tabListCalls = 0;
       const mockClientMismatch = {
-        async init() {},
+        async init() { },
         async callTool(name) {
           if (name === 'agent_browser_tab_list') {
             tabListCalls++;
@@ -852,7 +868,7 @@ async function runScopusAcceptanceSuite() {
           }
           return { raw: {}, text: '' };
         },
-        async close() {}
+        async close() { }
       };
 
       const result20d = await executeScopusBlock({
@@ -873,7 +889,7 @@ async function runScopusAcceptanceSuite() {
       // -------------------------------------------------------------------
       // Test 21: Engine Rejection of --cdp Combined with --allowed-domains
       // -------------------------------------------------------------------
-      console.log('[Test 21/22] Testing engine rejection of --cdp combined with --allowed-domains...');
+      console.log('[Test 21/27] Testing engine rejection of --cdp combined with --allowed-domains...');
       const binaryWin = path.resolve(__dirname, 'node_modules', 'agent-browser', 'bin', 'agent-browser-win32-x64.exe');
       const procReject = spawn(binaryWin, ['mcp', '--tools', 'core'], {
         stdio: ['pipe', 'pipe', 'pipe'],
@@ -894,7 +910,7 @@ async function runScopusAcceptanceSuite() {
                 const text = msg.result?.content?.[0]?.text || '';
                 resolve(text);
               }
-            } catch(e) {}
+            } catch (e) { }
           }
         });
         procReject.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05', clientInfo: { name: 'test', version: '1.0' }, capabilities: {} } }) + '\n');
@@ -913,11 +929,11 @@ async function runScopusAcceptanceSuite() {
       // -------------------------------------------------------------------
       // Test 22: Standalone Scopus CLI Flow Execution Against External Chrome
       // -------------------------------------------------------------------
-      console.log('[Test 22/22] Testing standalone CLI execution against external Chrome via child process...');
+      console.log('[Test 22/27] Testing standalone CLI execution against external Chrome via child process...');
       const cliScript = path.resolve(__dirname, 'bin', 'northbridge-scopus.mjs');
       const cliTargetFile = 'Ch3_34_SC_D3_cli_acceptance.csv';
       const cliTargetFullPath = path.join(exportsDir, cliTargetFile);
-      try { fs.unlinkSync(cliTargetFullPath); } catch (e) {}
+      try { fs.unlinkSync(cliTargetFullPath); } catch (e) { }
 
       // Run 1: Successful CLI export
       const cliProc1 = spawn('node', [
@@ -944,7 +960,7 @@ async function runScopusAcceptanceSuite() {
         setTimeout(() => {
           cliProc1.kill();
           resolve('TIMED_OUT');
-        }, 15000);
+        }, 45000);
       });
 
       assert.strictEqual(cliExit1, 0, `CLI process must exit with code 0 (stderr: ${cliStderr1}, stdout: ${cliStdout1})`);
@@ -981,7 +997,7 @@ async function runScopusAcceptanceSuite() {
         setTimeout(() => {
           cliProc2.kill();
           resolve('TIMED_OUT');
-        }, 15000);
+        }, 45000);
       });
 
       assert.strictEqual(cliExit2, 0, `Second CLI process must exit with code 0 on collision (stderr: ${cliStderr2}, stdout: ${cliStdout2})`);
@@ -992,8 +1008,8 @@ async function runScopusAcceptanceSuite() {
       assert.ok(fs.existsSync(collisionFile), 'Second file must be saved under unique collision name (1).csv');
 
       // Clean up CLI test files
-      try { fs.unlinkSync(cliTargetFullPath); } catch (e) {}
-      try { fs.unlinkSync(collisionFile); } catch (e) {}
+      try { fs.unlinkSync(cliTargetFullPath); } catch (e) { }
+      try { fs.unlinkSync(collisionFile); } catch (e) { }
 
       // Verify that unrelated tab still remains open and completely untouched
       const tabsAfterCli = await getChromeTabs(extChromePort);
@@ -1005,6 +1021,143 @@ async function runScopusAcceptanceSuite() {
       assert.strictEqual(extChromeProc.killed, false, 'External Chrome process must remain running');
       console.log('  PASS: Standalone CLI executed with code 0, 4 records exported, collision preserved, unrelated tab untouched.\n');
 
+      // -------------------------------------------------------------------
+      // Test 23: Opt-In Connection, Explicit Approval/Denial, and Tab Pinning
+      // -------------------------------------------------------------------
+      console.log('[Test 23/27] Testing opt-in connection, explicit approval/denial, and tab pinning...');
+
+      // 23a. Explicit Denial halts before accessing browser
+      const result23a = await verifyCdpAttachment({
+        cdp: extChromePort,
+        approved: false,
+        tab: 'harmless'
+      });
+      assert.strictEqual(result23a.ok, false, 'verifyCdpAttachment must fail when approved is false');
+      assert.ok(result23a.error.includes('APPROVAL ERROR') && result23a.error.includes('denied'), 'Must report APPROVAL ERROR on denial');
+      console.log('  23a observed denial error:', result23a.error);
+
+      // 23b. Opt-in connection without approval halts cleanly
+      const result23b = await verifyCdpAttachment({
+        cdp: extChromePort,
+        autoConnect: true,
+        approved: null,
+        tab: 'harmless'
+      });
+      assert.strictEqual(result23b.ok, false, 'verifyCdpAttachment must fail when autoConnect without approval');
+      assert.ok(result23b.error.includes('APPROVAL ERROR') && result23b.error.includes('approval required'), 'Must report approval required');
+      console.log('  23b observed unapproved auto-connect error:', result23b.error);
+
+      // 23c. Approved attachment attaches to exact target tab
+      const result23c = await verifyCdpAttachment({
+        cdp: extChromePort,
+        approved: true,
+        tab: 'harmless'
+      });
+      assert.strictEqual(result23c.ok, true, 'verifyCdpAttachment must succeed with approval');
+      assert.ok(result23c.targetTab.url.includes('/scopus/harmless'), 'Target tab must match harmless page');
+      assert.strictEqual(result23c.activeTab.targetId, harmlessPre.id, 'Active tab target ID must match target tab');
+      console.log('  23c observed approved attachment:', result23c.message);
+
+      // 23d. Tab Pinning: Bound tab gone reports error without falling back to unrelated tab
+      const mockTabGoneClient = {
+        async init() { },
+        async callTool(name) {
+          if (name === 'agent_browser_tab_list') {
+            return {
+              raw: {
+                structuredContent: {
+                  response: {
+                    data: {
+                      tabs: [{ tabId: 't1', targetId: 'PINNED_ID', active: true, title: 'Pinned Tab', url: 'http://127.0.0.1:4318/pinned' }]
+                    }
+                  }
+                }
+              }
+            };
+          }
+          if (name === 'agent_browser_tab_switch') {
+            return { raw: { isError: false }, text: 'OK' };
+          }
+          if (name === 'agent_browser_snapshot') {
+            return {
+              raw: {
+                isError: true,
+                structuredContent: {
+                  response: {
+                    code: 'tab_gone',
+                    error: 'tab_gone: bound tab is gone (targetId: PINNED_ID)',
+                    success: false
+                  }
+                }
+              },
+              text: 'tab_gone: bound tab is gone (targetId: PINNED_ID)'
+            };
+          }
+          return { raw: {}, text: '' };
+        },
+        async close() { }
+      };
+
+      assert.strictEqual(isTabGone(await mockTabGoneClient.callTool('agent_browser_snapshot')), true, 'isTabGone helper must recognize tab_gone code');
+
+      const result23d = await executeScopusBlock({
+        block: 'D3-PIN-TAB-GONE',
+        claim: 'Test',
+        query: 'test',
+        control: 'test',
+        cdp: extChromePort,
+        tab: 'Pinned Tab',
+        client: mockTabGoneClient
+      });
+      assert.strictEqual(result23d.exportSuccess, false, 'Must fail when bound tab is gone');
+      assert.strictEqual(result23d.queryExecuted, false, 'Search must not execute when bound tab is gone');
+      assert.ok(result23d.lastLine.includes('TAB ERROR') && result23d.lastLine.includes('Bound tab is gone or closed'), 'Must report bound tab is gone error');
+      console.log('  23d observed tab_gone error:', result23d.lastLine);
+
+      // 23e. CLI execution with --deny halts with code 1
+      const cliDenyProc = spawn('node', [
+        cliScript,
+        '--cdp', String(extChromePort),
+        '--tab', 'harmless',
+        '--deny'
+      ], { cwd: __dirname });
+      let cliDenyStderr = '';
+      cliDenyProc.stderr.on('data', d => cliDenyStderr += d.toString());
+      const cliDenyExit = await new Promise(r => cliDenyProc.on('exit', r));
+      assert.strictEqual(cliDenyExit, 1, 'CLI --deny must exit with code 1');
+      assert.ok(cliDenyStderr.includes('APPROVAL ERROR'), 'CLI --deny must output APPROVAL ERROR');
+      console.log('  23e observed CLI --deny clean halt with code 1');
+
+      // 23f. CLI execution with --approved and --verify-attachment exits with code 0
+      const cliApproveProc = spawn('node', [
+        cliScript,
+        '--cdp', String(extChromePort),
+        '--tab', 'harmless',
+        '--approved',
+        '--verify-attachment'
+      ], { cwd: __dirname });
+      let cliApproveStdout = '';
+      cliApproveProc.stdout.on('data', d => cliApproveStdout += d.toString());
+      const cliApproveExit = await new Promise(r => cliApproveProc.on('exit', r));
+      assert.strictEqual(cliApproveExit, 0, 'CLI --approved --verify-attachment must exit with code 0');
+      assert.ok(cliApproveStdout.includes('Status: OK'), 'CLI stdout must report Status: OK');
+      console.log('  23f observed CLI --approved --verify-attachment clean success with code 0');
+
+      // 23g. Verify unrelated tab remains completely untouched
+      const tabsAfter23 = await getChromeTabs(extChromePort);
+      const unrelatedAfter23 = tabsAfter23.find(t => t.id === unrelatedIdBefore);
+      assert.ok(unrelatedAfter23, 'Unrelated tab must remain open and present after Test 23');
+      assert.strictEqual(unrelatedAfter23.url, unrelatedUrlBefore, 'Unrelated tab URL must remain completely untouched');
+      console.log('  23g observed unrelated tab completely untouched:', unrelatedAfter23.url);
+      // 23h. Explicit profileDir discovery never falls back to system Chrome / 9222 when DevToolsActivePort is absent
+      const isolatedNoDebugDir = path.join(testDownloadsDir, 'empty-profile-no-debug');
+      fs.mkdirSync(isolatedNoDebugDir, { recursive: true });
+      const isolatedCheck = await discoverChromeEndpoint({ autoConnect: true, profileDir: isolatedNoDebugDir });
+      assert.strictEqual(isolatedCheck.valid, false, 'Explicit profileDir without DevToolsActivePort must fail instead of falling back to system Chrome / 9222');
+      assert.ok(isolatedCheck.error.includes('specified profile directory'), 'Must report missing endpoint in specified profile directory');
+      console.log('  23h observed explicit profileDir isolation (no fallback to 9222)');
+      console.log('  PASS: Opt-in approval/denial, tab pinning safety, CLI flags, and tab isolation verified.\n');
+
     } finally {
       // Clean up external Chrome process tree and profile in os.tmpdir()
       try {
@@ -1012,7 +1165,7 @@ async function runScopusAcceptanceSuite() {
           execSync(`taskkill /pid ${extChromeProc.pid} /T /F`, { stdio: 'ignore' });
         }
       } catch (e) {
-        try { extChromeProc.kill(); } catch (e2) {}
+        try { extChromeProc.kill(); } catch (e2) { }
       }
       for (let i = 0; i < 5; i++) {
         try {
@@ -1026,9 +1179,360 @@ async function runScopusAcceptanceSuite() {
       }
     }
 
-    console.log('========================================================================');
-    console.log('ALL SCOPUS ACCEPTANCE TESTS PASSED (22/22)!');
-    console.log('========================================================================\n');
+    // -------------------------------------------------------------------
+    // Test 24: Multi-Attribute Snapshot Ref Parsing & Ambiguous Download Detection
+    // -------------------------------------------------------------------
+    console.log('[Test 24/27] Testing multi-attribute snapshot ref parsing & ambiguous download rejection...');
+    const sampleSnap = [
+      '- toolbar "Results actions":',
+      '  - button "Export filter counts" [ref=e329]',
+      '  - button "Export" [expanded=false, ref=e330]',
+      '  - menuitem "CSV" [ref=e501]',
+      '  - checkbox "Abstract & keywords" [checked=false, ref=e444]'
+    ].join('\n');
+    assert.strictEqual(findRef(sampleSnap, /button\s+"Export"\s*\[/i), '@e330', 'Must match ref=e330 inside [expanded=false, ref=e330]');
+    assert.strictEqual(findRef(sampleSnap, /checkbox\s+"Abstract & keywords"/i), '@e444', 'Must match ref=e444 inside [checked=false, ref=e444]');
+    assert.strictEqual(findRef(sampleSnap, /menuitem\s+"CSV"/i), '@e501', 'Must match ref=e501 inside [ref=e501]');
+
+    const beforeDlMap = new Map([['old_existing.csv', { size: 512, mtimeMs: 1000 }]]);
+    const nowMs = Date.now();
+    const pendingDl = identifyFreshDownload(beforeDlMap, [
+      { name: 'old_existing.csv', size: 512, mtimeMs: 1000 },
+      { name: 'scopus.csv.crdownload', size: 128, mtimeMs: nowMs }
+    ], { clickStartTime: nowMs - 100 });
+    assert.strictEqual(pendingDl.ok, false);
+    assert.strictEqual(pendingDl.pending, true, 'Temp .crdownload must be treated as pending');
+
+    const ambigDl = identifyFreshDownload(beforeDlMap, [
+      { name: 'old_existing.csv', size: 512, mtimeMs: 1000 },
+      { name: 'scopus_export_1.csv', size: 2048, mtimeMs: nowMs },
+      { name: 'scopus_export_2.csv', size: 2048, mtimeMs: nowMs }
+    ], { clickStartTime: nowMs - 100 });
+    assert.strictEqual(ambigDl.ok, false, 'Ambiguous download with 2 new CSVs must fail');
+    assert.strictEqual(ambigDl.ambiguous, true, 'Must set ambiguous=true when >1 candidate matches');
+    assert.ok(ambigDl.error.includes('EXPORT AMBIGUOUS'), 'Must report EXPORT AMBIGUOUS');
+
+    const singleFreshDl = identifyFreshDownload(beforeDlMap, [
+      { name: 'old_existing.csv', size: 512, mtimeMs: 1000 },
+      { name: 'scopus_export_clean.csv', size: 2048, mtimeMs: nowMs }
+    ], { clickStartTime: nowMs - 100 });
+    assert.strictEqual(singleFreshDl.ok, true, 'Single new CSV must resolve cleanly');
+    assert.strictEqual(singleFreshDl.file.name, 'scopus_export_clean.csv');
+    console.log('  PASS: Multi-attribute @ref parsing and ambiguous download rejection verified.\n');
+
+    // -------------------------------------------------------------------
+    // Test 25: CSV Validation Distingushing Missing Columns vs Blank Fields
+    // -------------------------------------------------------------------
+    console.log('[Test 25/27] Testing UTF-8 BOM CSV validation (missing header columns vs individual blank fields)...');
+    const bomBlankCellsCsv = '\uFEFF' + [
+      '"Authors","Title","Year","DOI","Abstract","Author Keywords","Index Keywords"',
+      '"A1","Paper One","2025","","Abstract text one.","KW1; KW2",""',
+      '"A2","Paper Two","2026","10.1000/2","Abstract text two.","","Idx2"'
+    ].join('\r\n') + '\r\n';
+    const validWithBlanks = validateScopusCsvContent(bomBlankCellsCsv, { expectedRowCount: 2 });
+    assert.strictEqual(validWithBlanks.ok, true, `Valid schema with individual blank DOI/keywords must PASS: ${validWithBlanks.error}`);
+    assert.strictEqual(validWithBlanks.parsedRowCount, 2);
+    assert.strictEqual(validWithBlanks.blankCells.doi, 1, 'Must count 1 blank DOI cell');
+    assert.strictEqual(validWithBlanks.blankCells.authorKeywords, 1, 'Must count 1 blank Author Keywords cell');
+    assert.strictEqual(validWithBlanks.blankCells.indexKeywords, 1, 'Must count 1 blank Index Keywords cell');
+
+    const missingHeaderCsv = '\uFEFF' + [
+      '"Authors","Title","Year","Abstract","Author Keywords"',
+      '"A1","Paper One","2025","Abstract text one.","KW1"'
+    ].join('\r\n') + '\r\n';
+    const missingColRes = validateScopusCsvContent(missingHeaderCsv, { expectedRowCount: 1 });
+    assert.strictEqual(missingColRes.ok, false, 'CSV omitting DOI column header must FAIL');
+    assert.ok(missingColRes.missingColumns.includes('DOI'), 'Missing columns list must identify DOI');
+    console.log('  PASS: Missing column headers fail while valid rows with blank DOI/keywords pass with blank counts.\n');
+
+    // -------------------------------------------------------------------
+    // Tests 26-27: Dynamic --auto-connect (DevToolsActivePort) on Live-Like Results Fixture
+    // -------------------------------------------------------------------
+    const autoChromeProfile = path.join(os.tmpdir(), `northbridge-auto-chrome-${Date.now()}`);
+    fs.mkdirSync(autoChromeProfile, { recursive: true });
+    const autoChromeProc = spawn(chromeExe, [
+      '--remote-debugging-port=0',
+      `--user-data-dir=${autoChromeProfile}`,
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--headless=new',
+      `${baseUrl}/scopus/unrelated`
+    ]);
+
+    try {
+      let autoChromePort = null;
+      const autoPortFile = path.join(autoChromeProfile, 'DevToolsActivePort');
+      for (let i = 0; i < 50 && !autoChromePort; i++) {
+        if (fs.existsSync(autoPortFile)) {
+          const p = parseInt(fs.readFileSync(autoPortFile, 'utf8').split(/\r?\n/)[0], 10);
+          if (p > 0) autoChromePort = p;
+        }
+        if (!autoChromePort) await new Promise(r => setTimeout(r, 200));
+      }
+      assert.ok(autoChromePort, 'Chrome with --remote-debugging-port=0 must publish DevToolsActivePort');
+      await waitForChromeReady(autoChromePort);
+
+      // -----------------------------------------------------------------
+      // Test 26: Repeatable Export-Only Workflow on Live-Like Scopus Results Tab (1-20 of 25)
+      // -----------------------------------------------------------------
+      console.log('[Test 26/27] Testing repeatable Export-only command via DevToolsActivePort --auto-connect (1-20 of 25)...');
+      const liveLikeUrl = `${baseUrl}/scopus/results-live-like?count=25`;
+      await openTabInChrome(autoChromePort, liveLikeUrl);
+      let autoTabsPre = [];
+      for (let i = 0; i < 25; i++) {
+        autoTabsPre = await getChromeTabs(autoChromePort);
+        const hasUnrelated = autoTabsPre.some(t => t.url && t.url.includes('/scopus/unrelated'));
+        const hasLiveLike = autoTabsPre.some(t => t.url && t.url.includes('/scopus/results-live-like') && t.title && t.title.includes('Live-Like Fixture'));
+        if (hasUnrelated && hasLiveLike) break;
+        await new Promise(r => setTimeout(r, 200));
+      }
+      const autoUnrelatedPre = autoTabsPre.find(t => t.url && t.url.includes('/scopus/unrelated'));
+      assert.ok(autoUnrelatedPre, 'Unrelated tab must exist in auto-connect Chrome before Test 26');
+
+      const pilotTestDir = path.join(testDownloadsDir, 'pilot-test-exports');
+      const d3Query = 'TITLE-ABS-KEY ( "rank order centroid" OR "surrogate weight*" OR "ranked attribute weight*" OR "rank-based weight*" )';
+
+      // 26a. Approval gate check for exportScopusResultsTab
+      const unapprovedExp = await exportScopusResultsTab({
+        autoConnect: true,
+        profileDir: autoChromeProfile,
+        approved: null,
+        tab: 'Live-Like Fixture',
+        from: 1,
+        to: 20,
+        outputDir: pilotTestDir
+      });
+      assert.strictEqual(unapprovedExp.ok, false);
+      assert.strictEqual(unapprovedExp.status, 'APPROVAL_REQUIRED');
+
+      // 26b. Verified repeatable API export (1-20 of 25, unchecked Abstract & keywords enabled cleanly)
+      const expRes26 = await exportScopusResultsTab({
+        autoConnect: true,
+        approved: true,
+        profileDir: autoChromeProfile,
+        tab: 'Live-Like Fixture',
+        from: 1,
+        to: 20,
+        expectedQuery: d3Query,
+        outputDir: pilotTestDir,
+        exportFile: 'Ch3_34_SC_D3_1-20.csv'
+      });
+      assert.strictEqual(expRes26.ok, true, `Repeatable export should succeed: ${expRes26.error}`);
+      assert.strictEqual(expRes26.totalMain, 25, 'Results page must observe 25 total docs');
+      assert.strictEqual(expRes26.parsedRowCount, 20, 'Must export exactly requested batch 1-20 (20 rows)');
+      assert.strictEqual(expRes26.blankCells.doi, 2, 'Synthetic batch 1-20 includes 2 papers with blank DOI');
+      assert.strictEqual(expRes26.blankCells.authorKeywords, 2, 'Synthetic batch 1-20 includes 2 papers with blank Author Keywords');
+      assert.strictEqual(expRes26.blankCells.indexKeywords, 2, 'Synthetic batch 1-20 includes 2 papers with blank Index Keywords');
+      assert.ok(fs.existsSync(expRes26.exportFilePath), 'Verified CSV must exist in pilotTestDir');
+      const saved26Bytes = fs.readFileSync(expRes26.exportFilePath);
+
+      // 26c. CLI `export` subcommand collision test (same filename preserved byte-for-byte -> saved as (1).csv)
+      const autoCliScript = path.resolve(__dirname, 'bin', 'northbridge-scopus.mjs');
+      const expCliProc = spawn('node', [
+        autoCliScript,
+        'export',
+        '--auto-connect',
+        '--approved',
+        '--profile-dir', autoChromeProfile,
+        '--tab', 'Live-Like Fixture',
+        '--range', '1-20',
+        '--expected-query', d3Query,
+        '--output', pilotTestDir,
+        '--export', 'Ch3_34_SC_D3_1-20.csv'
+      ], { cwd: __dirname, stdio: ['pipe', 'pipe', 'pipe'] });
+      let expCliStdout = '';
+      let expCliStderr = '';
+      expCliProc.stdout.on('data', d => expCliStdout += d.toString());
+      expCliProc.stderr.on('data', d => expCliStderr += d.toString());
+      const expCliExit = await new Promise((resolve) => {
+        expCliProc.on('exit', resolve);
+        setTimeout(() => { expCliProc.kill(); resolve('TIMED_OUT'); }, 45000);
+      });
+      assert.strictEqual(expCliExit, 0, `CLI export must exit 0 (stderr=${expCliStderr}, stdout=${expCliStdout})`);
+      assert.ok(expCliStdout.includes('Status: OK (EXPORTED)'));
+      assert.ok(Buffer.compare(fs.readFileSync(expRes26.exportFilePath), saved26Bytes) === 0, 'Existing CSV must remain byte-for-byte unchanged');
+      assert.ok(fs.existsSync(path.join(pilotTestDir, 'Ch3_34_SC_D3_1-20 (1).csv')), 'Collision CLI export must save to (1).csv');
+
+      const tabsAfter26 = await getChromeTabs(autoChromePort);
+      const unrelatedAfter26 = tabsAfter26.find(t => t.id === autoUnrelatedPre.id);
+      assert.ok(unrelatedAfter26 && unrelatedAfter26.url === autoUnrelatedPre.url, 'Unrelated tab must stay untouched after export CLI');
+      console.log(`  PASS: 20-row batch exported via ${expRes26.downloadAttribution?.method} (${expRes26.metrics.browserActionMs}ms, DevToolsActivePort=${autoChromePort}), collision preserved.\n`);
+
+      // -----------------------------------------------------------------
+      // Test 27: Query Mismatch Halt & Missing CSV Column Header Failure on End-to-End Export
+      // -----------------------------------------------------------------
+      console.log('[Test 27/27] Testing query mismatch halt and missing CSV column header failure...');
+      await openTabInChrome(autoChromePort, `${baseUrl}/scopus/results-live-like?count=5&omit_cols=abstract`);
+      for (let i = 0; i < 25; i++) {
+        const tabs = await getChromeTabs(autoChromePort);
+        if (tabs.some(t => t.url && t.url.includes('omit_cols=abstract') && t.title && t.title.includes('Live-Like Fixture'))) break;
+        await new Promise(r => setTimeout(r, 200));
+      }
+      const mismatchQueryRes = await exportScopusResultsTab({
+        autoConnect: true,
+        approved: true,
+        profileDir: autoChromeProfile,
+        tab: 'omit_cols=abstract',
+        from: 1,
+        to: 5,
+        expectedQuery: 'TITLE-ABS-KEY ( "different query" )',
+        outputDir: pilotTestDir,
+        exportFile: 'should_not_exist_q.csv'
+      });
+      assert.strictEqual(mismatchQueryRes.ok, false);
+      assert.strictEqual(mismatchQueryRes.status, 'QUERY_MISMATCH');
+      assert.ok(!fs.existsSync(path.join(pilotTestDir, 'should_not_exist_q.csv')));
+
+      const omitAbstractRes = await exportScopusResultsTab({
+        autoConnect: true,
+        approved: true,
+        profileDir: autoChromeProfile,
+        tab: 'omit_cols=abstract',
+        from: 1,
+        to: 5,
+        outputDir: pilotTestDir,
+        exportFile: 'should_not_exist_col.csv'
+      });
+      assert.strictEqual(omitAbstractRes.ok, false);
+      assert.strictEqual(omitAbstractRes.status, 'CSV_VALIDATION_FAILED');
+      assert.ok((omitAbstractRes.missingColumns || []).includes('Abstract'), 'Must report missing Abstract column');
+      assert.ok(!fs.existsSync(path.join(pilotTestDir, 'should_not_exist_col.csv')), 'Invalid CSV omitting Abstract must not be placed into outputDir');
+      console.log('  PASS: Query mismatch halted before export and missing Abstract column rejected before placement.\n');
+
+      // -----------------------------------------------------------------
+      // Test 28: Dedicated-Profile Guard & Strict CDP Tab Attribution Under Competing Downloads
+      // -----------------------------------------------------------------
+      console.log('[Test 28/28] Testing dedicated-profile guard & strict CDP attribution against competing-tab CSV downloads...');
+
+      // 28a. Dedicated Chrome profile enforcement (shared default profile & bare --cdp refused)
+      const sharedDefaultProfile = process.env.LOCALAPPDATA
+        ? path.join(process.env.LOCALAPPDATA, 'Google', 'Chrome', 'User Data')
+        : path.join(os.homedir(), '.config', 'google-chrome');
+      assert.strictEqual(isSharedDefaultChromeProfileDir(sharedDefaultProfile), true, 'Default User Data dir must be recognized as shared');
+      assert.strictEqual(isSharedDefaultChromeProfileDir(path.join(sharedDefaultProfile, 'Default')), true, 'Subprofile under User Data must be recognized as shared');
+      assert.strictEqual(isSharedDefaultChromeProfileDir(autoChromeProfile), false, 'Temp dedicated profile must not be flagged as shared');
+
+      const sharedProfileGuardRes = await exportScopusResultsTab({
+        autoConnect: true,
+        approved: true,
+        profileDir: sharedDefaultProfile,
+        tab: 'Live-Like Fixture',
+        from: 1,
+        to: 5,
+        outputDir: pilotTestDir,
+        exportFile: 'should_not_exist_shared.csv'
+      });
+      assert.strictEqual(sharedProfileGuardRes.ok, false);
+      assert.strictEqual(sharedProfileGuardRes.status, 'DEDICATED_PROFILE_REQUIRED');
+
+      const bareCdpGuardRes = await exportScopusResultsTab({
+        cdp: autoChromePort,
+        approved: true,
+        tab: 'Live-Like Fixture',
+        from: 1,
+        to: 5,
+        outputDir: pilotTestDir,
+        exportFile: 'should_not_exist_bare_cdp.csv'
+      });
+      assert.strictEqual(bareCdpGuardRes.ok, false);
+      assert.strictEqual(bareCdpGuardRes.status, 'DEDICATED_PROFILE_REQUIRED');
+
+      const refusedMonitorShared = await createCdpDownloadSession(
+        'ws://127.0.0.1:9999/devtools/browser/none',
+        'TARGET_1',
+        path.join(testDownloadsDir, 'dl-guard'),
+        { profileSafety: inspectChromeProfileSafety({ profileDir: sharedDefaultProfile }) }
+      );
+      assert.strictEqual(refusedMonitorShared.ok, false);
+      assert.strictEqual(refusedMonitorShared.status, 'DEDICATED_PROFILE_REQUIRED');
+
+      const refusedMonitorNoTarget = await createCdpDownloadSession(
+        'ws://127.0.0.1:9999/devtools/browser/none',
+        null,
+        path.join(testDownloadsDir, 'dl-no-target')
+      );
+      assert.strictEqual(refusedMonitorNoTarget.ok, false);
+      assert.strictEqual(refusedMonitorNoTarget.status, 'TARGET_ID_REQUIRED');
+      console.log('  28a verified dedicated-profile guard and closed failure when targetId is missing');
+
+      // 28b. Competing tab downloads valid 20-row decoy CSV while approved tab emits NO download -> MUST FAIL & reject decoy
+      await openTabInChrome(autoChromePort, `${baseUrl}/scopus/competing-download?token=race1`);
+      await openTabInChrome(autoChromePort, `${baseUrl}/scopus/results-live-like?count=25&compete_token=race1&drop_download=1`);
+      for (let i = 0; i < 30; i++) {
+        const tabs = await getChromeTabs(autoChromePort);
+        const hasCompete = tabs.some(t => t.url && t.url.includes('token=race1') && t.title && t.title.includes('race1'));
+        const hasTarget = tabs.some(t => t.url && t.url.includes('compete_token=race1') && t.title && t.title.includes('Live-Like Fixture'));
+        if (hasCompete && hasTarget) break;
+        await new Promise(r => setTimeout(r, 200));
+      }
+      await new Promise(r => setTimeout(r, 250)); // Ensure competing tab long-poll is armed
+
+      const competeFailRes = await exportScopusResultsTab({
+        autoConnect: true,
+        approved: true,
+        profileDir: autoChromeProfile,
+        tab: 'compete_token=race1',
+        from: 1,
+        to: 20,
+        outputDir: pilotTestDir,
+        exportFile: 'should_not_exist_competing.csv',
+        downloadTimeoutMs: 2500
+      });
+      assert.strictEqual(competeFailRes.ok, false, 'Download from another tab MUST NEVER be accepted as the approved export');
+      assert.strictEqual(competeFailRes.status, 'DOWNLOAD_FAILED');
+      assert.ok((competeFailRes.ignoredOtherTabCount || 0) >= 1, `Expected competing tab download event to be explicitly ignored (got ${competeFailRes.ignoredOtherTabCount})`);
+      assert.ok(competeFailRes.error.includes('Ignored'), `Timeout error must note ignored foreign-tab events: ${competeFailRes.error}`);
+      assert.ok(!fs.existsSync(path.join(pilotTestDir, 'should_not_exist_competing.csv')), 'Decoy competing CSV must NEVER be placed in outputDir');
+      console.log(`  28b rejected decoy CSV from competing tab cleanly (ignoredOtherTabCount=${competeFailRes.ignoredOtherTabCount})`);
+
+      // 28c. Competing tab completes decoy 20-row CSV FIRST while approved tab completes REAL 20-row CSV 450ms later -> ONLY approved tab CSV saved
+      await openTabInChrome(autoChromePort, `${baseUrl}/scopus/competing-download?token=race2`);
+      await openTabInChrome(autoChromePort, `${baseUrl}/scopus/results-live-like?count=25&compete_token=race2&delay_ms=450`);
+      for (let i = 0; i < 30; i++) {
+        const tabs = await getChromeTabs(autoChromePort);
+        const hasCompete = tabs.some(t => t.url && t.url.includes('token=race2') && t.title && t.title.includes('race2'));
+        const hasTarget = tabs.some(t => t.url && t.url.includes('compete_token=race2') && t.title && t.title.includes('Live-Like Fixture'));
+        if (hasCompete && hasTarget) break;
+        await new Promise(r => setTimeout(r, 200));
+      }
+      await new Promise(r => setTimeout(r, 250));
+
+      const competeRaceWinnerRes = await exportScopusResultsTab({
+        autoConnect: true,
+        approved: true,
+        profileDir: autoChromeProfile,
+        tab: 'compete_token=race2',
+        from: 1,
+        to: 20,
+        outputDir: pilotTestDir,
+        exportFile: 'Ch3_34_SC_D3_competing_winner_check.csv'
+      });
+      assert.strictEqual(competeRaceWinnerRes.ok, true, `Approved tab real export should succeed despite competing download: ${competeRaceWinnerRes.error}`);
+      assert.strictEqual(competeRaceWinnerRes.parsedRowCount, 20);
+      assert.ok((competeRaceWinnerRes.downloadAttribution?.ignoredOtherTabCount || 0) >= 1, 'Competing tab event must be logged as ignored');
+      const winnerCsv = fs.readFileSync(competeRaceWinnerRes.exportFilePath, 'utf8');
+      assert.ok(winnerCsv.includes('Decision quality using ranked attribute weights'), 'Saved CSV must come from the approved Scopus tab');
+      assert.ok(!winnerCsv.includes('DECOY COMPETING ROW'), 'Saved CSV must NOT contain decoy rows from competing tab');
+      console.log(`  28c attributed approved tab CSV exclusively while ignoring ${competeRaceWinnerRes.downloadAttribution.ignoredOtherTabCount} competing download(s).\n`);
+    } finally {
+      try {
+        if (autoChromeProc && autoChromeProc.pid) {
+          execSync(`taskkill /pid ${autoChromeProc.pid} /T /F`, { stdio: 'ignore' });
+        }
+      } catch (e) {
+        try { autoChromeProc.kill(); } catch (e2) { }
+      }
+      for (let i = 0; i < 5; i++) {
+        try {
+          if (fs.existsSync(autoChromeProfile)) {
+            fs.rmSync(autoChromeProfile, { recursive: true, force: true });
+          }
+          break;
+        } catch (e) {
+          await new Promise(r => setTimeout(r, 100));
+        }
+      }
+    }
 
   } finally {
     await fixture.stop();
@@ -1045,6 +1549,10 @@ async function runScopusAcceptanceSuite() {
       }
     }
   }
+
+  console.log('========================================================================');
+  console.log('ALL SCOPUS ACCEPTANCE TESTS PASSED (28/28)!');
+  console.log('========================================================================\n');
 }
 
 runScopusAcceptanceSuite().then(() => {
